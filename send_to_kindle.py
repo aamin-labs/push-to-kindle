@@ -142,7 +142,7 @@ def _embed_img_srcs(content: str) -> tuple[str, int]:
         nonlocal count
         url = match.group(1)
         try:
-            resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            resp = requests.get(url, timeout=10, headers=_BROWSER_HEADERS)
             resp.raise_for_status()
             ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
             if not ct.startswith("image/") or ct == "image/webp":
@@ -190,7 +190,7 @@ def _prepend_images_from_raw(content: str, raw_html: str, base_url: str) -> str:
     embedded = []
     for url in img_urls:
         try:
-            resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            resp = requests.get(url, timeout=10, headers=_BROWSER_HEADERS)
             resp.raise_for_status()
             ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
             if not ct.startswith("image/") or ct == "image/webp":
@@ -206,11 +206,29 @@ def _prepend_images_from_raw(content: str, raw_html: str, base_url: str) -> str:
     return "\n".join(embedded) + "\n" + content
 
 
+def _safe_filename(title: str) -> str:
+    return "".join(c if c.isalnum() or c in " -_" else "_" for c in title[:80])
+
+
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 def fetch_article(url: str, include_images: bool = True) -> tuple[str, str]:
     """Fetch and extract article content. Returns (title, html_content)."""
-    response = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-    response.raise_for_status()
-    raw_html = response.text
+    # Try trafilatura's fetcher first (better anti-bot handling), fall back to requests
+    raw_html = trafilatura.fetch_url(url)
+    if not raw_html:
+        response = requests.get(url, timeout=15, headers=_BROWSER_HEADERS)
+        response.raise_for_status()
+        raw_html = response.text
 
     metadata = trafilatura.bare_extraction(raw_html, url=url)
     title = metadata.title if metadata else None
@@ -290,7 +308,7 @@ def send_via_smtp(title: str, html: str) -> None:
             "(required on non-macOS systems)."
         )
 
-    safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title[:80])
+    safe_title = _safe_filename(title)
 
     msg = MIMEMultipart()
     msg["From"] = SMTP_USER
@@ -314,7 +332,7 @@ def send_via_smtp(title: str, html: str) -> None:
 
 def send_via_mail_app(title: str, html: str) -> None:
     """Send the HTML document via Mail.app using AppleScript (macOS only)."""
-    safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title[:80])
+    safe_title = _safe_filename(title)
 
     with tempfile.NamedTemporaryFile(
         suffix=".html", prefix=safe_title + "_", delete=False, mode="w", encoding="utf-8"
@@ -349,16 +367,39 @@ def send_via_mail_app(title: str, html: str) -> None:
 
 def dry_run(title: str, html: str) -> None:
     """Save the extracted HTML locally for inspection without sending."""
-    safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title[:80])
+    safe_title = _safe_filename(title)
     out_path = Path(f"{safe_title}.html").resolve()
     out_path.write_text(html, encoding="utf-8")
     print(f"Dry run — saved to: {out_path}")
     print("Open the file to preview how it will appear on Kindle.")
 
 
+def convert_html_file(path: str, title_override: str | None = None) -> tuple[str, str]:
+    """Read a rendered HTML fragment from a file. Returns (title, html_content)."""
+    content = Path(path).read_text(encoding="utf-8").strip()
+
+    if title_override:
+        title = title_override
+    else:
+        m = re.search(r"<h1[^>]*>(.*?)</h1>", content, re.IGNORECASE | re.DOTALL)
+        title = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else "Article"
+
+    return title, content
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Send a web article to your Kindle.")
-    parser.add_argument("url", help="URL of the article to send")
+    parser.add_argument("url", nargs="?", help="URL of the article to send")
+    parser.add_argument(
+        "--html-file",
+        metavar="PATH",
+        help="Send a pre-rendered HTML fragment file instead of fetching a URL",
+    )
+    parser.add_argument(
+        "--title",
+        metavar="TITLE",
+        help="Override the article title (useful with --html-file)",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -371,10 +412,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if not args.html_file and not args.url:
+        parser.error("provide a URL or --html-file PATH")
+
     try:
-        print(f"Fetching: {args.url}")
-        include_images = not args.no_images
-        title, content = fetch_article(args.url, include_images=include_images)
+        if args.html_file:
+            print(f"Reading: {args.html_file}")
+            title, content = convert_html_file(args.html_file, title_override=args.title)
+        else:
+            print(f"Fetching: {args.url}")
+            include_images = not args.no_images
+            title, content = fetch_article(args.url, include_images=include_images)
         print(f"Extracted: {title!r}")
 
         html = wrap_html(title, content)

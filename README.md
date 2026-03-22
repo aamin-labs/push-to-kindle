@@ -62,9 +62,21 @@ if [[ -z "$URL" || "$URL" == "missing value" ]]; then
   URL=$(pbpaste)
 fi
 
-result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_to_kindle.py" "$URL" 2>&1)
+if [[ "$URL" == https://defuddle.md/* ]]; then
+  # Grab the rendered article HTML and title directly from the live Brave tab
+  PAGE_HTML=$(osascript -e 'tell application "Brave Browser" to execute front window'"'"'s active tab javascript "var el = document.querySelector('"'"'article,main,[class*=content],.markdown'"'"'); el ? el.innerHTML : document.body.innerHTML"' 2>/dev/null)
+  PAGE_TITLE=$(osascript -e 'tell application "Brave Browser" to execute front window'"'"'s active tab javascript "document.title"' 2>/dev/null)
+  TMPFILE=$(mktemp /tmp/defuddleXXXXXX)
+  printf '%s' "$PAGE_HTML" > "$TMPFILE"
+  result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_to_kindle.py" --html-file "$TMPFILE" --title "$PAGE_TITLE" 2>&1)
+  EXIT_CODE=$?
+  rm -f "$TMPFILE"
+else
+  result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_to_kindle.py" "$URL" 2>&1)
+  EXIT_CODE=$?
+fi
 
-if [ $? -eq 0 ]; then
+if [ $EXIT_CODE -eq 0 ]; then
     notification=$(echo "$result" | tail -1)
     osascript -e "display notification \"$notification\" with title \"Sent to Kindle\""
 else
@@ -72,15 +84,24 @@ else
 fi
 ```
 
-The script grabs the active tab URL from Brave automatically, with a fallback to clipboard content if Brave isn't the frontmost app.
+The script grabs the active tab URL from Brave automatically. If the tab is a **defuddle.md** URL, it extracts the already-rendered HTML from the live page and sends that — useful for articles (e.g. X/Twitter posts) that don't extract cleanly from their original URL. Otherwise it fetches and extracts as normal. Falls back to clipboard if Brave isn't frontmost.
 
 ## How it works
 
-1. Fetches the page with `requests`
+**URL path (normal articles):**
+1. Fetches the page with `requests` / `trafilatura`
 2. Extracts article content with `trafilatura`
 3. Downloads and embeds images as base64 data URIs (skip with `--no-images`)
 4. Wraps it in a minimal HTML document with readable typography
 5. Sends it via Mail.app on macOS, or SMTP on Linux/Windows
+
+**defuddle.md path (hard-to-extract articles, e.g. X/Twitter):**
+1. Alfred detects the `https://defuddle.md/*` URL in the active Brave tab
+2. Executes JavaScript in Brave to grab the already-rendered article HTML and page title
+3. Writes the HTML to a temp file and calls `send_to_kindle.py --html-file ... --title ...`
+4. Python wraps it in the same styled HTML document and sends it
+
+> **Requires:** Brave → View > Developer → Allow JavaScript from Apple Events must be enabled.
 
 ## Requirements
 
