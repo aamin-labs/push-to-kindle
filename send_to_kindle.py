@@ -4,6 +4,7 @@
 import sys
 import os
 import re
+import base64
 import textwrap
 import tempfile
 import subprocess
@@ -14,9 +15,13 @@ from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
 from pathlib import Path
+from html import escape as html_escape
+from urllib.parse import urljoin, urlparse, parse_qs, unquote
 from dotenv import load_dotenv
 import requests
 import trafilatura
+from lxml import etree as letree
+from lxml import html as lhtml
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -35,25 +40,213 @@ def use_smtp() -> bool:
     return bool(SMTP_SERVER and SMTP_USER and SMTP_PASSWORD)
 
 
-def fetch_article(url: str) -> tuple[str, str]:
+_SKIP_IMAGE = re.compile(r"(placeholder|tracking|pixel|spacer|\.svg)", re.IGNORECASE)
+
+
+def _pick_srcset_url(srcset: str) -> str:
+    """Return the largest-width URL from a srcset string."""
+    best_url, best_w = "", 0
+    for entry in srcset.split(","):
+        parts = entry.strip().split()
+        if not parts:
+            continue
+        url = parts[0]
+        w = 0
+        if len(parts) > 1 and parts[1].endswith("w"):
+            try:
+                w = int(parts[1][:-1])
+            except ValueError:
+                pass
+        if w > best_w or not best_url:
+            best_w, best_url = w, url
+    return best_url
+
+
+def _strip_webp(url: str) -> str:
+    """Convert .jpg.webp / .png.webp → .jpg / .png (Kindle doesn't support WebP)."""
+    if url.lower().endswith(".webp"):
+        base = url[:-5]
+        if re.search(r"\.(jpe?g|png|gif)$", base, re.IGNORECASE):
+            return base
+    return url
+
+
+def _unwrap_next_image(url: str) -> str:
+    """Extract the real image URL from a Next.js /_next/image?url=... proxy URL."""
+    if "/_next/image" in url:
+        params = parse_qs(urlparse(url).query)
+        if "url" in params:
+            return unquote(params["url"][0])
+    return url
+
+
+def _xml_to_html(xml_str: str, base_url: str) -> str:
+    """Convert trafilatura XML to HTML, resolving image URLs in their original positions."""
+    try:
+        root = letree.fromstring(xml_str.encode())
+    except letree.XMLSyntaxError:
+        return ""
+
+    def convert(el) -> str:
+        tag = el.tag
+        text = html_escape(el.text or "")
+        tail = html_escape(el.tail or "")
+        children = "".join(convert(c) for c in el)
+        inner = text + children
+
+        if tag in ("doc", "main", "comments", "header", "footer"):
+            return inner + tail
+        elif tag == "head":
+            level = el.get("rend", "h2")
+            if level not in ("h1", "h2", "h3", "h4", "h5", "h6"):
+                level = "h2"
+            return f"<{level}>{inner}</{level}>\n{tail}"
+        elif tag == "p":
+            return f"<p>{inner}</p>\n{tail}"
+        elif tag == "list":
+            lt = "ol" if el.get("rend") == "ol" else "ul"
+            return f"<{lt}>{inner}</{lt}>\n{tail}"
+        elif tag == "item":
+            return f"<li>{inner}</li>\n{tail}"
+        elif tag in ("quote", "abstract"):
+            return f"<blockquote>{inner}</blockquote>\n{tail}"
+        elif tag == "code":
+            return f"<pre><code>{inner}</code></pre>\n{tail}"
+        elif tag == "hi":
+            rend = el.get("rend", "")
+            if "bold" in rend:
+                return f"<strong>{inner}</strong>{tail}"
+            elif "italic" in rend:
+                return f"<em>{inner}</em>{tail}"
+            return inner + tail
+        elif tag == "graphic":
+            src = el.get("src", "")
+            if not src:
+                return tail
+            abs_url = _unwrap_next_image(urljoin(base_url, src))
+            abs_url = _strip_webp(abs_url)
+            if not abs_url.startswith(("http://", "https://")) or _SKIP_IMAGE.search(abs_url):
+                return tail
+            return f'<figure><img src="{abs_url}" alt=""></figure>\n{tail}'
+        else:
+            return inner + tail
+
+    return convert(root)
+
+
+def _embed_img_srcs(content: str) -> tuple[str, int]:
+    """Download and base64-embed all <img src="http..."> URLs already in content."""
+    count = 0
+
+    def replace_src(match: re.Match) -> str:
+        nonlocal count
+        url = match.group(1)
+        try:
+            resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            if not ct.startswith("image/") or ct == "image/webp":
+                return match.group(0)
+            b64 = base64.b64encode(resp.content).decode("ascii")
+            count += 1
+            return f'src="data:{ct};base64,{b64}"'
+        except Exception:
+            return match.group(0)
+
+    result = re.sub(r'src="(https?://[^"]+)"', replace_src, content)
+    return result, count
+
+
+def _prepend_images_from_raw(content: str, raw_html: str, base_url: str) -> str:
+    """Fallback: extract images from article container in raw HTML and prepend."""
+    tree = lhtml.fromstring(raw_html)
+    container = tree.find(".//article") or tree.find(".//main") or tree
+    scoped_html = lhtml.tostring(container, encoding="unicode")
+
+    seen: set[str] = set()
+    img_urls: list[str] = []
+
+    for tag_m in re.finditer(r"<img\b[^>]*/?>", scoped_html, re.IGNORECASE):
+        img_html = tag_m.group(0)
+        srcset_m = re.search(r'srcset="([^"]+)"', img_html, re.IGNORECASE)
+        if srcset_m:
+            url = _pick_srcset_url(srcset_m.group(1))
+        else:
+            src_m = re.search(r'src="([^"]+)"', img_html, re.IGNORECASE)
+            if not src_m:
+                continue
+            url = src_m.group(1)
+
+        if not url or url.startswith("data:"):
+            continue
+        abs_url = _unwrap_next_image(urljoin(base_url, url))
+        abs_url = _strip_webp(abs_url)
+        if not abs_url.startswith(("http://", "https://")) or _SKIP_IMAGE.search(abs_url):
+            continue
+        if abs_url not in seen:
+            seen.add(abs_url)
+            img_urls.append(abs_url)
+
+    embedded = []
+    for url in img_urls:
+        try:
+            resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            if not ct.startswith("image/") or ct == "image/webp":
+                continue
+            b64 = base64.b64encode(resp.content).decode("ascii")
+            embedded.append(f'<figure><img src="data:{ct};base64,{b64}" alt=""></figure>')
+        except Exception:
+            continue
+
+    if not embedded:
+        return content
+    print(f"  Embedded {len(embedded)} image(s) (prepended)")
+    return "\n".join(embedded) + "\n" + content
+
+
+def fetch_article(url: str, include_images: bool = True) -> tuple[str, str]:
     """Fetch and extract article content. Returns (title, html_content)."""
     response = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
     response.raise_for_status()
-    html = response.text
+    raw_html = response.text
 
-    metadata = trafilatura.bare_extraction(html, url=url)
+    metadata = trafilatura.bare_extraction(raw_html, url=url)
     title = metadata.title if metadata else None
     if not title:
-        m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
+        m = re.search(r"<title[^>]*>([^<]+)</title>", raw_html, re.IGNORECASE)
         title = m.group(1).strip() if m else "Article"
 
-    content = trafilatura.extract(
-        html,
-        output_format="html",
-        include_images=False,
-        include_links=False,
-        url=url,
-    )
+    if include_images:
+        # XML mode preserves <graphic> positions — convert to HTML with img srcs in place
+        xml = trafilatura.extract(
+            raw_html, output_format="xml", include_images=True, include_links=False, url=url
+        )
+        content = _xml_to_html(xml, url) if xml else ""
+        if content:
+            print("Embedding images...")
+            content, count = _embed_img_srcs(content)
+            if count:
+                print(f"  Embedded {count} image(s) in position")
+            elif not content.strip():
+                content = ""  # force fallback
+
+        if not content:
+            # Fallback: trafilatura HTML + prepend images from raw HTML
+            content = trafilatura.extract(
+                raw_html, output_format="html", include_images=False,
+                include_links=False, url=url,
+            ) or ""
+            if content:
+                print("Embedding images...")
+                content = _prepend_images_from_raw(content, raw_html, url)
+    else:
+        content = trafilatura.extract(
+            raw_html, output_format="html", include_images=False,
+            include_links=False, url=url,
+        ) or ""
+
     if not content:
         raise ValueError("Could not extract article content from page.")
 
@@ -77,6 +270,8 @@ def wrap_html(title: str, content: str) -> str:
             blockquote {{ border-left: 3px solid #ccc; margin: 1em 0; padding-left: 1em;
                           color: #555; }}
             pre, code {{ font-family: monospace; background: #f4f4f4; padding: 0.2em 0.4em; }}
+            img {{ max-width: 100%; height: auto; display: block; margin: 1em auto; }}
+            figure {{ margin: 1em 0; }}
           </style>
         </head>
         <body>
@@ -128,7 +323,7 @@ def send_via_mail_app(title: str, html: str) -> None:
         tmp_path = f.name
 
     try:
-        escaped_title = title.replace('"', '\\"')
+        escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
         sender_prop = f', sender:"{SENDER_EMAIL}"' if SENDER_EMAIL else ""
         script = f"""
         set theFile to (POSIX file "{tmp_path}") as alias
@@ -151,6 +346,7 @@ def send_via_mail_app(title: str, html: str) -> None:
     print(f"Sent from: {sender_display}  →  make sure this is on your Kindle approved list")
 
 
+
 def dry_run(title: str, html: str) -> None:
     """Save the extracted HTML locally for inspection without sending."""
     safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title[:80])
@@ -168,24 +364,34 @@ def main() -> None:
         action="store_true",
         help="Extract and save HTML locally without sending",
     )
+    parser.add_argument(
+        "--no-images",
+        action="store_true",
+        help="Skip downloading and embedding images",
+    )
     args = parser.parse_args()
 
-    print(f"Fetching: {args.url}")
-    title, content = fetch_article(args.url)
-    print(f"Extracted: {title!r}")
+    try:
+        print(f"Fetching: {args.url}")
+        include_images = not args.no_images
+        title, content = fetch_article(args.url, include_images=include_images)
+        print(f"Extracted: {title!r}")
 
-    html = wrap_html(title, content)
+        html = wrap_html(title, content)
 
-    if args.dry_run:
-        dry_run(title, html)
-        return
+        if args.dry_run:
+            dry_run(title, html)
+            return
 
-    if use_smtp():
-        send_via_smtp(title, html)
-    else:
-        send_via_mail_app(title, html)
+        if use_smtp():
+            send_via_smtp(title, html)
+        else:
+            send_via_mail_app(title, html)
 
-    print(f"Sent to Kindle: {title}")
+        print(f"Sent to Kindle: {title}")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
