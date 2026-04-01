@@ -35,11 +35,11 @@ Build a `kindle_device` module with `is_connected()` and `list_documents()`. Wir
 
 ### Acceptance criteria
 
-- [ ] Plugging in the Kindle and visiting `localhost:5000` shows a list of article titles
-- [ ] Unplugging the Kindle (or visiting without it connected) shows a "not connected" message
-- [ ] System files (`My Clippings.txt`, `.sdr` folders, hidden files) do not appear in the list
-- [ ] Each list item shows a human-readable title derived from the filename
-- [ ] `python3 kindle_manager.py` starts the server without error
+- [x] Plugging in the Kindle and visiting `localhost:5001` shows a list of article titles
+- [x] Unplugging the Kindle (or visiting without it connected) shows a "not connected" message
+- [x] System files (`My Clippings.txt`, `.sdr` folders, hidden files) do not appear in the list
+- [x] Each list item shows a human-readable title derived from the filename
+- [x] `python3 kindle_manager.py` starts the server without error
 
 ---
 
@@ -56,12 +56,12 @@ Add a delete button to each article row. Clicking it shows a browser confirmatio
 
 ### Acceptance criteria
 
-- [ ] Each article has a delete button
-- [ ] Clicking delete shows a confirmation dialog before proceeding
-- [ ] Confirming removes the `.azw3` (or other format) file from the Kindle
-- [ ] The matching `.sdr` sidecar directory is also removed if it exists
-- [ ] The article row disappears from the UI immediately after deletion (no full page reload)
-- [ ] Cancelling the confirmation does nothing
+- [x] Each article has a delete button
+- [x] Clicking delete shows a confirmation dialog before proceeding
+- [x] Confirming removes the `.azw3` (or other format) file from the Kindle
+- [x] The matching `.sdr` sidecar directory is also removed if it exists
+- [x] The article row disappears from the UI immediately after deletion (no full page reload)
+- [x] Cancelling the confirmation does nothing
 
 ---
 
@@ -79,8 +79,8 @@ Add `webbrowser.open()` so the browser launches automatically on server start. S
 
 ### Acceptance criteria
 
-- [ ] Running `python3 kindle_manager.py` opens the browser automatically at `localhost:5000`
-- [ ] The page is clean and easy to scan (Instapaper-style)
-- [ ] An empty state message appears when there are no articles on the device
-- [ ] If the Kindle is disconnected mid-session, the UI shows an error rather than crashing
-- [ ] The app can be stopped with `Ctrl+C`
+- [x] Running `python3 kindle_manager.py` opens the browser automatically at `localhost:5001`
+- [x] The page is clean and easy to scan (Instapaper-style)
+- [x] An empty state message appears when there are no articles on the device
+- [x] If the Kindle is disconnected mid-session, the UI shows an error rather than crashing
+- [x] The app can be stopped with `Ctrl+C`

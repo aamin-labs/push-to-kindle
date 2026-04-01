@@ -130,6 +130,13 @@ HTML = """
   </main>
 
   <script>
+    function emptyState() {
+      return `<div class="status">
+        <strong>No articles on your Kindle</strong>
+        Send some articles and they will appear here.
+      </div>`;
+    }
+
     async function load() {
       const root = document.getElementById("root");
       const res = await fetch("/api/documents");
@@ -145,11 +152,7 @@ HTML = """
       }
 
       if (data.documents.length === 0) {
-        root.innerHTML = `
-          <div class="status">
-            <strong>No articles on your Kindle</strong>
-            Send some articles and they will appear here.
-          </div>`;
+        root.innerHTML = emptyState();
         return;
       }
 
@@ -158,15 +161,20 @@ HTML = """
         <ul id="list"></ul>`;
 
       const list = document.getElementById("list");
+      list.addEventListener("click", e => {
+        if (e.target.matches("button[data-filename]")) {
+          deleteDoc(e.target, e.target.dataset.filename);
+        }
+      });
+
       for (const doc of data.documents) {
         const li = document.createElement("li");
-        li.dataset.filename = doc.filename;
         li.innerHTML = `
           <div class="article-text">
             <div class="title">${escapeHtml(doc.title)}</div>
             ${doc.snippet ? `<div class="snippet">${escapeHtml(doc.snippet)}</div>` : ""}
           </div>
-          <button onclick="deleteDoc(this, '${escapeHtml(doc.filename)}')">Delete</button>`;
+          <button data-filename="${escapeHtml(doc.filename)}">Delete</button>`;
         list.appendChild(li);
       }
     }
@@ -185,15 +193,10 @@ HTML = """
         const li = btn.closest("li");
         li.remove();
         const remaining = document.querySelectorAll("#list li").length;
-        const countEl = document.getElementById("count");
         if (remaining === 0) {
-          document.getElementById("root").innerHTML = `
-            <div class="status">
-              <strong>No articles on your Kindle</strong>
-              Send some articles and they will appear here.
-            </div>`;
+          document.getElementById("root").innerHTML = emptyState();
         } else {
-          countEl.textContent = `${remaining} article${remaining === 1 ? "" : "s"}`;
+          document.getElementById("count").textContent = `${remaining} article${remaining === 1 ? "" : "s"}`;
         }
       } else {
         btn.disabled = false;

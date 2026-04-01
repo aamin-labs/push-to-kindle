@@ -597,6 +597,19 @@ def _extract_snippet(markdown: str, max_chars: int = 200) -> str:
     return snippet[:max_chars] + ("…" if len(snippet) > max_chars else "")
 
 
+def _update_json_log(path: Path, key: str, value: str) -> None:
+    """Read a JSON dict log at path, set key=value, and write it back."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(existing, dict):
+            existing = {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        existing = {}
+    existing[key] = value
+    path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def save_snippet(title: str, markdown: str) -> None:
     """Append {title: snippet} to ~/logs/kindle-snippets.json."""
     if not markdown:
@@ -604,43 +617,12 @@ def save_snippet(title: str, markdown: str) -> None:
     snippet = _extract_snippet(markdown)
     if not snippet:
         return
-
-    log_path = Path.home() / "logs" / "kindle-snippets.json"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    existing: dict = {}
-    try:
-        existing = json.loads(log_path.read_text(encoding="utf-8"))
-        if not isinstance(existing, dict):
-            existing = {}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        existing = {}
-
-    existing[title] = snippet
-    log_path.write_text(
-        json.dumps(existing, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _update_json_log(Path.home() / "logs" / "kindle-snippets.json", title, snippet)
 
 
 def save_to_kindle_bear_map(title: str, note_id: str) -> None:
     """Append {title: note_id} to ~/logs/kindle-bear-map.json."""
-    log_path = Path.home() / "logs" / "kindle-bear-map.json"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    existing: dict = {}
-    try:
-        existing = json.loads(log_path.read_text(encoding="utf-8"))
-        if not isinstance(existing, dict):
-            existing = {}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        existing = {}
-
-    existing[title] = note_id
-    log_path.write_text(
-        json.dumps(existing, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _update_json_log(Path.home() / "logs" / "kindle-bear-map.json", title, note_id)
 
 
 def main() -> None:

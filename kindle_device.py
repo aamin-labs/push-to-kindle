@@ -96,11 +96,10 @@ def list_documents() -> list[Document]:
 def delete_document(filename: str) -> None:
     """Delete a document and its .sdr sidecar from the Kindle."""
     doc_path = DOCUMENTS_DIR / filename
-    if not doc_path.exists():
-        raise FileNotFoundError(f"Document not found: {filename}")
-
-    doc_path.unlink()
+    doc_path.unlink()  # raises FileNotFoundError if not found
 
     sidecar = DOCUMENTS_DIR / (Path(filename).stem + ".sdr")
-    if sidecar.exists() and sidecar.is_dir():
+    try:
         shutil.rmtree(sidecar)
+    except FileNotFoundError:
+        pass
