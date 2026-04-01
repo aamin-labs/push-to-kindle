@@ -583,6 +583,46 @@ def create_bear_note(title: str, url: str, markdown_content: str = "") -> str | 
         return None
 
 
+def _extract_snippet(markdown: str, max_chars: int = 200) -> str:
+    """Return the first two non-empty, non-heading lines of markdown as a snippet."""
+    lines = []
+    for line in markdown.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+        if len(lines) == 2:
+            break
+    snippet = " ".join(lines)
+    return snippet[:max_chars] + ("…" if len(snippet) > max_chars else "")
+
+
+def save_snippet(title: str, markdown: str) -> None:
+    """Append {title: snippet} to ~/logs/kindle-snippets.json."""
+    if not markdown:
+        return
+    snippet = _extract_snippet(markdown)
+    if not snippet:
+        return
+
+    log_path = Path.home() / "logs" / "kindle-snippets.json"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: dict = {}
+    try:
+        existing = json.loads(log_path.read_text(encoding="utf-8"))
+        if not isinstance(existing, dict):
+            existing = {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        existing = {}
+
+    existing[title] = snippet
+    log_path.write_text(
+        json.dumps(existing, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def save_to_kindle_bear_map(title: str, note_id: str) -> None:
     """Append {title: note_id} to ~/logs/kindle-bear-map.json."""
     log_path = Path.home() / "logs" / "kindle-bear-map.json"
@@ -670,6 +710,8 @@ def main() -> None:
             else:
                 send_epub_via_mail_app(title, epub_bytes)
 
+            save_snippet(title, markdown)
+
             if sys.platform == "darwin":
                 note_id = create_bear_note(title, original_url, markdown)
                 if note_id:
@@ -695,6 +737,8 @@ def main() -> None:
                 send_via_smtp(title, html)
             else:
                 send_via_mail_app(title, html)
+
+            save_snippet(title, article_markdown)
 
             if sys.platform == "darwin":
                 note_id = create_bear_note(title, args.url, article_markdown)

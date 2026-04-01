@@ -1,3 +1,4 @@
 trafilatura
 python-dotenv
 requests
+flask
