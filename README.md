@@ -46,6 +46,34 @@ python3 send_to_kindle.py --dry-run "https://example.com/article"
 
 The article is extracted, wrapped in a clean HTML document, and delivered to your Kindle. It appears on your device within a minute or two.
 
+On macOS, a Bear note is also created automatically — tagged `#0a/reading`, with the article title, URL, date, and full article body in Markdown. The note ID is saved to `~/logs/kindle-bear-map.json` for highlight sync later.
+
+## Syncing highlights
+
+When your Kindle is plugged in via USB, run:
+
+```bash
+python3 sync_highlights.py
+```
+
+This parses `My Clippings.txt`, matches each document to its Bear note via `~/logs/kindle-bear-map.json`, and inlines your highlights as `==highlighted text==` directly in the article body. Passages that can't be located in the note are appended under `## Unmatched Highlights`. A seen-log (`~/logs/kindle-seen.json`) prevents re-syncing highlights across runs.
+
+```bash
+# Preview without touching Bear
+python3 sync_highlights.py --dry-run
+
+# Use a custom clippings path
+python3 sync_highlights.py --clippings /path/to/My\ Clippings.txt
+```
+
+**Auto-sync on plug-in (macOS):** A launchd agent watches for the clippings file and fires the sync automatically:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.aamin.kindle-sync.plist
+```
+
+Check `~/logs/kindle-sync.log` to see sync output.
+
 ## Alfred workflow (macOS)
 
 Trigger a send from any article open in Brave without leaving the browser:
@@ -62,19 +90,8 @@ if [[ -z "$URL" || "$URL" == "missing value" ]]; then
   URL=$(pbpaste)
 fi
 
-if [[ "$URL" == https://defuddle.md/* ]]; then
-  # Grab the rendered article HTML and title directly from the live Brave tab
-  PAGE_HTML=$(osascript -e 'tell application "Brave Browser" to execute front window'"'"'s active tab javascript "var el = document.querySelector('"'"'article,main,[class*=content],.markdown'"'"'); el ? el.innerHTML : document.body.innerHTML"' 2>/dev/null)
-  PAGE_TITLE=$(osascript -e 'tell application "Brave Browser" to execute front window'"'"'s active tab javascript "document.title"' 2>/dev/null)
-  TMPFILE=$(mktemp /tmp/defuddleXXXXXX)
-  printf '%s' "$PAGE_HTML" > "$TMPFILE"
-  result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_to_kindle.py" --html-file "$TMPFILE" --title "$PAGE_TITLE" 2>&1)
-  EXIT_CODE=$?
-  rm -f "$TMPFILE"
-else
-  result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_to_kindle.py" "$URL" 2>&1)
-  EXIT_CODE=$?
-fi
+result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_to_kindle.py" "$URL" 2>&1)
+EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
     notification=$(echo "$result" | tail -1)
@@ -84,7 +101,7 @@ else
 fi
 ```
 
-The script grabs the active tab URL from Brave automatically. If the tab is a **defuddle.md** URL, it extracts the already-rendered HTML from the live page and sends that — useful for articles (e.g. X/Twitter posts) that don't extract cleanly from their original URL. Otherwise it fetches and extracts as normal. Falls back to clipboard if Brave isn't frontmost.
+The script grabs the active tab URL from Brave automatically and passes it to the Python script. defuddle.md URLs are handled natively by the script (see below). Falls back to clipboard if Brave isn't frontmost.
 
 ## How it works
 
@@ -94,14 +111,15 @@ The script grabs the active tab URL from Brave automatically. If the tab is a **
 3. Downloads and embeds images as base64 data URIs (skip with `--no-images`)
 4. Wraps it in a minimal HTML document with readable typography
 5. Sends it via Mail.app on macOS, or SMTP on Linux/Windows
+6. Creates a Bear note tagged `#0a/reading` with the article Markdown body (macOS, URL path only)
 
 **defuddle.md path (hard-to-extract articles, e.g. X/Twitter):**
-1. Alfred detects the `https://defuddle.md/*` URL in the active Brave tab
-2. Executes JavaScript in Brave to grab the already-rendered article HTML and page title
-3. Writes the HTML to a temp file and calls `send_to_kindle.py --html-file ... --title ...`
-4. Python wraps it in the same styled HTML document and sends it
+1. Script detects `https://defuddle.md/*` URL automatically
+2. Fetches clean markdown directly from the defuddle.md API (`text/markdown` response with YAML frontmatter)
+3. Converts to EPUB using pandoc — renders better than HTML for markdown content on Kindle
+4. Sends EPUB to Kindle; creates Bear note with the original article URL from the frontmatter `source:` field
 
-> **Requires:** Brave → View > Developer → Allow JavaScript from Apple Events must be enabled.
+> **Requires:** pandoc installed (`brew install pandoc`).
 
 ## Requirements
 

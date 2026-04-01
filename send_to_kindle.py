@@ -10,13 +10,17 @@ import tempfile
 import subprocess
 import smtplib
 import argparse
+import json
+import datetime
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
 from pathlib import Path
 from html import escape as html_escape
-from urllib.parse import urljoin, urlparse, parse_qs, unquote
+from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote
 from dotenv import load_dotenv
 import requests
 import trafilatura
@@ -268,7 +272,89 @@ def fetch_article(url: str, include_images: bool = True) -> tuple[str, str]:
     if not content:
         raise ValueError("Could not extract article content from page.")
 
-    return title, content
+    markdown = trafilatura.extract(
+        raw_html, output_format="markdown", include_images=False,
+        include_links=True, url=url,
+    ) or ""
+
+    return title, content, markdown
+
+
+def fetch_defuddle_markdown(url: str) -> tuple[str, str, str]:
+    """Fetch markdown from a defuddle.md URL.
+
+    Returns (title, full_markdown_with_frontmatter, original_url).
+    Raises ValueError if defuddle returns an error.
+    """
+    resp = requests.get(url, timeout=20, headers=_BROWSER_HEADERS)
+    ct = resp.headers.get("Content-Type", "")
+    if not ct.startswith("text/markdown"):
+        try:
+            data = resp.json()
+            raise ValueError(f"defuddle.md error: {data.get('error', resp.text[:200])}")
+        except (ValueError, KeyError):
+            raise ValueError(f"defuddle.md returned unexpected content-type: {ct}")
+
+    full_markdown = resp.text
+
+    # Parse YAML frontmatter (between the two --- delimiters)
+    frontmatter = ""
+    parts = full_markdown.split("\n---\n", 2)
+    if len(parts) >= 2 and parts[0].startswith("---"):
+        frontmatter = parts[0][3:]  # strip leading ---
+
+    def _fm_field(key: str) -> str:
+        m = re.search(rf'^{key}:\s*"?(.*?)"?\s*$', frontmatter, re.MULTILINE)
+        return m.group(1).strip() if m else ""
+
+    title = _fm_field("title") or "Article"
+    original_url = _fm_field("source")
+
+    # Fallback: reconstruct original URL from defuddle URL path
+    if not original_url:
+        prefix = "https://defuddle.md/"
+        path = url[len(prefix):]
+        original_url = "https://" + path if "." in path else url
+
+    return title, full_markdown, original_url
+
+
+def markdown_to_epub(title: str, markdown: str) -> bytes:
+    """Convert markdown (with YAML frontmatter) to EPUB bytes using pandoc.
+
+    Raises RuntimeError if pandoc is not installed.
+    """
+    try:
+        subprocess.run(["pandoc", "--version"], capture_output=True, check=True)
+    except FileNotFoundError:
+        raise RuntimeError("pandoc is not installed. Install with: brew install pandoc")
+
+    md_file = None
+    epub_file = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w", encoding="utf-8") as f:
+            f.write(markdown)
+            md_file = f.name
+
+        with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as f:
+            epub_file = f.name
+
+        result = subprocess.run(
+            ["pandoc", "--from", "markdown", "--to", "epub3", "-o", epub_file, md_file],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"pandoc error: {result.stderr.decode().strip()}")
+
+        return Path(epub_file).read_bytes()
+    finally:
+        if md_file:
+            os.unlink(md_file)
+        if epub_file:
+            try:
+                os.unlink(epub_file)
+            except FileNotFoundError:
+                pass
 
 
 def wrap_html(title: str, content: str) -> str:
@@ -365,6 +451,70 @@ def send_via_mail_app(title: str, html: str) -> None:
 
 
 
+def send_epub_via_smtp(title: str, epub_bytes: bytes) -> None:
+    """Send an EPUB document to Kindle via SMTP."""
+    if not (SMTP_SERVER and SMTP_USER and SMTP_PASSWORD):
+        sys.exit(
+            "Error: SMTP_SERVER, SMTP_USER, and SMTP_PASSWORD must be set in .env "
+            "(required on non-macOS systems)."
+        )
+
+    safe_title = _safe_filename(title)
+
+    msg = MIMEMultipart()
+    msg["From"] = SMTP_USER
+    msg["To"] = KINDLE_EMAIL
+    msg["Subject"] = title
+    msg.attach(MIMEText("Sent via push-to-kindle.", "plain"))
+
+    part = MIMEBase("application", "epub+zip")
+    part.set_payload(epub_bytes)
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", "attachment", filename=f"{safe_title}.epub")
+    msg.attach(part)
+
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.sendmail(SMTP_USER, KINDLE_EMAIL, msg.as_string())
+
+    print(f"Sent from: {SMTP_USER}  →  make sure this is on your Kindle approved list")
+
+
+def send_epub_via_mail_app(title: str, epub_bytes: bytes) -> None:
+    """Send an EPUB document via Mail.app using AppleScript (macOS only)."""
+    safe_title = _safe_filename(title)
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".epub", prefix=safe_title + "_", delete=False, mode="wb"
+    ) as f:
+        f.write(epub_bytes)
+        tmp_path = f.name
+
+    try:
+        escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+        sender_prop = f', sender:"{SENDER_EMAIL}"' if SENDER_EMAIL else ""
+        script = f"""
+        set theFile to (POSIX file "{tmp_path}") as alias
+        tell application "Mail"
+            set m to make new outgoing message with properties {{subject:"{escaped_title}", content:" ", visible:false{sender_prop}}}
+            tell m
+                make new to recipient with properties {{address:"{KINDLE_EMAIL}"}}
+                make new attachment with properties {{file name:theFile}} at after last paragraph of content of m
+                send
+            end tell
+        end tell
+        """
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Mail.app error: {result.stderr.strip()}")
+    finally:
+        os.unlink(tmp_path)
+
+    sender_display = SENDER_EMAIL or "Mail.app default account"
+    print(f"Sent from: {sender_display}  →  make sure this is on your Kindle approved list")
+
+
 def dry_run(title: str, html: str) -> None:
     """Save the extracted HTML locally for inspection without sending."""
     safe_title = _safe_filename(title)
@@ -385,6 +535,72 @@ def convert_html_file(path: str, title_override: str | None = None) -> tuple[str
         title = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else "Article"
 
     return title, content
+
+
+def create_bear_note(title: str, url: str, markdown_content: str = "") -> str | None:
+    """Create a Bear note for a sent article. Returns the note identifier, or None on failure."""
+    today = datetime.date.today().isoformat()
+    body_parts = [today, "", url]
+    if markdown_content:
+        body_parts += ["", "---", "", markdown_content]
+    note_body = "\n".join(body_parts)
+
+    class _BearCallbackHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            params = parse_qs(urlparse(self.path).query)
+            self.server.bear_identifier = params.get("identifier", [None])[0]
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+        def log_message(self, *args):
+            pass
+
+    try:
+        server = HTTPServer(("localhost", 0), _BearCallbackHandler)
+        server.bear_identifier = None
+        port = server.server_address[1]
+
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+
+        callback_url = f"http://localhost:{port}/"
+        bear_url = (
+            "bear://x-callback-url/create"
+            f"?title={quote(title)}"
+            f"&text={quote(note_body)}"
+            f"&tags={quote('0a/reading')}"
+            f"&x-success={quote(callback_url)}"
+        )
+        subprocess.run(["open", bear_url], check=True)
+        server_thread.join(timeout=8)
+        server.shutdown()
+        server.server_close()
+        return server.bear_identifier
+    except Exception as e:
+        print(f"Warning: Bear note creation failed: {e}", file=sys.stderr)
+        return None
+
+
+def save_to_kindle_bear_map(title: str, note_id: str) -> None:
+    """Append {title: note_id} to ~/logs/kindle-bear-map.json."""
+    log_path = Path.home() / "logs" / "kindle-bear-map.json"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: dict = {}
+    try:
+        existing = json.loads(log_path.read_text(encoding="utf-8"))
+        if not isinstance(existing, dict):
+            existing = {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        existing = {}
+
+    existing[title] = note_id
+    log_path.write_text(
+        json.dumps(existing, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def main() -> None:
@@ -419,24 +635,75 @@ def main() -> None:
         if args.html_file:
             print(f"Reading: {args.html_file}")
             title, content = convert_html_file(args.html_file, title_override=args.title)
+            article_markdown = ""
+
+            html = wrap_html(title, content)
+
+            if args.dry_run:
+                dry_run(title, html)
+                return
+
+            if use_smtp():
+                send_via_smtp(title, html)
+            else:
+                send_via_mail_app(title, html)
+
+            print(f"Sent to Kindle: {title}")
+
+        elif args.url and args.url.startswith("https://defuddle.md/"):
+            print(f"Fetching via defuddle.md: {args.url}")
+            title, markdown, original_url = fetch_defuddle_markdown(args.url)
+            print(f"Extracted: {title!r}")
+
+            if args.dry_run:
+                safe_title = _safe_filename(title)
+                out_path = Path(f"{safe_title}.md").resolve()
+                out_path.write_text(markdown, encoding="utf-8")
+                print(f"Dry run — saved markdown to: {out_path}")
+                return
+
+            print("Converting to EPUB...")
+            epub_bytes = markdown_to_epub(title, markdown)
+
+            if use_smtp():
+                send_epub_via_smtp(title, epub_bytes)
+            else:
+                send_epub_via_mail_app(title, epub_bytes)
+
+            if sys.platform == "darwin":
+                note_id = create_bear_note(title, original_url, markdown)
+                if note_id:
+                    save_to_kindle_bear_map(title, note_id)
+                else:
+                    print("Warning: Bear note not created", file=sys.stderr)
+
+            print(f"Sent to Kindle: {title}")
+
         else:
             print(f"Fetching: {args.url}")
             include_images = not args.no_images
-            title, content = fetch_article(args.url, include_images=include_images)
-        print(f"Extracted: {title!r}")
+            title, content, article_markdown = fetch_article(args.url, include_images=include_images)
+            print(f"Extracted: {title!r}")
 
-        html = wrap_html(title, content)
+            html = wrap_html(title, content)
 
-        if args.dry_run:
-            dry_run(title, html)
-            return
+            if args.dry_run:
+                dry_run(title, html)
+                return
 
-        if use_smtp():
-            send_via_smtp(title, html)
-        else:
-            send_via_mail_app(title, html)
+            if use_smtp():
+                send_via_smtp(title, html)
+            else:
+                send_via_mail_app(title, html)
 
-        print(f"Sent to Kindle: {title}")
+            if sys.platform == "darwin":
+                note_id = create_bear_note(title, args.url, article_markdown)
+                if note_id:
+                    save_to_kindle_bear_map(title, note_id)
+                else:
+                    print("Warning: Bear note not created", file=sys.stderr)
+
+            print(f"Sent to Kindle: {title}")
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
