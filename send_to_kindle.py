@@ -545,13 +545,16 @@ def create_bear_note(title: str, url: str, markdown_content: str = "") -> str | 
         body_parts += ["", "---", "", markdown_content]
     note_body = "\n".join(body_parts)
 
+    callback_html = _bear_callback_html()
+
     class _BearCallbackHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             params = parse_qs(urlparse(self.path).query)
             self.server.bear_identifier = params.get("identifier", [None])[0]
             self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"OK")
+            self.wfile.write(callback_html.encode("utf-8"))
             threading.Thread(target=self.server.shutdown, daemon=True).start()
 
         def log_message(self, *args):
@@ -581,6 +584,27 @@ def create_bear_note(title: str, url: str, markdown_content: str = "") -> str | 
     except Exception as e:
         print(f"Warning: Bear note creation failed: {e}", file=sys.stderr)
         return None
+
+
+def _bear_callback_html() -> str:
+    """Minimal callback page that tries to close itself after Bear redirects to localhost."""
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Bear callback</title>
+  <script>
+    window.open("", "_self");
+    window.close();
+    setTimeout(function () {
+      document.body.textContent = "Bear callback complete. You can close this tab.";
+      location.replace("about:blank");
+    }, 80);
+  </script>
+</head>
+<body></body>
+</html>
+"""
 
 
 def _extract_snippet(markdown: str, max_chars: int = 200) -> str:
