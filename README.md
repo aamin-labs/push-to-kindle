@@ -18,16 +18,14 @@ Edit `.env` (created by setup):
 KINDLE_EMAIL=yourname@kindle.com
 ```
 
-See `.env.example` for all options including `SENDER_EMAIL` and SMTP settings.
+See `.env.example` for SMTP settings.
 
 **Prerequisites:**
 
 1. Add your sending email to Amazon's approved senders list:
    Amazon account → Manage Your Content and Devices → Preferences → Personal Document Settings → Approved Personal Document E-mail List
 
-2. **macOS:** Mail.app must be configured with the account you want to send from. Set `SENDER_EMAIL` in `.env` if you have multiple accounts — the script prints which address it uses so you know what to whitelist.
-
-3. **Linux / Windows:** Set `SMTP_SERVER`, `SMTP_USER`, and `SMTP_PASSWORD` in `.env`. Use an app-specific password, not your main account password.
+2. Set `SMTP_SERVER`, `SMTP_USER`, and `SMTP_PASSWORD` in `.env`. Use an app-specific password, not your main account password.
 
 ## Usage
 
@@ -110,11 +108,11 @@ The script grabs the active tab URL from Brave automatically and passes it to th
 2. Extracts article content with `trafilatura`
 3. Downloads and embeds images as base64 data URIs (skip with `--no-images`)
 4. Wraps it in a minimal HTML document with readable typography
-5. Sends it via Mail.app on macOS, or SMTP on Linux/Windows
+5. Sends it via SMTP
 6. Creates a Bear note tagged `#0a/reading` with the article Markdown body (macOS, URL path only)
 
 **defuddle.md path (hard-to-extract articles, e.g. X/Twitter):**
-1. Script detects `https://defuddle.md/*` URL automatically
+1. Script detects `https://defuddle.md/*` URLs automatically, and rewrites direct `https://x.com/*` URLs to `https://defuddle.md/x.com/*`
 2. Fetches clean markdown directly from the defuddle.md API (`text/markdown` response with YAML frontmatter)
 3. Converts to EPUB using pandoc — renders better than HTML for markdown content on Kindle
 4. Sends EPUB to Kindle; creates Bear note with the original article URL from the frontmatter `source:` field
@@ -124,7 +122,7 @@ The script grabs the active tab URL from Brave automatically and passes it to th
 ## Requirements
 
 - Python 3.9+
-- macOS with Mail.app configured, **or** any platform with SMTP credentials
+- SMTP credentials for the sender account
 - Amazon Kindle with Personal Documents enabled
 
 ## License

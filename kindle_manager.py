@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kindle Manager — local web app to view and delete articles on your Kindle."""
+"""Kindle Manager — local web app to view articles on your Kindle."""
 
 import webbrowser
 import threading
@@ -70,19 +70,11 @@ HTML = """
     }
 
     li {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
       padding: 1rem 1.2rem;
       border-bottom: 1px solid #f0f0f0;
     }
 
     li:last-child { border-bottom: none; }
-
-    .article-text {
-      flex: 1;
-      padding-right: 1rem;
-    }
 
     .title {
       font-size: 0.95rem;
@@ -95,24 +87,6 @@ HTML = """
       margin-top: 0.2rem;
       line-height: 1.4;
     }
-
-    button {
-      background: none;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      padding: 0.3rem 0.7rem;
-      font-size: 0.8rem;
-      color: #999;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: border-color 0.15s, color 0.15s;
-    }
-
-    button:hover {
-      border-color: #e05252;
-      color: #e05252;
-    }
-
     #count {
       font-size: 0.85rem;
       color: #888;
@@ -161,47 +135,13 @@ HTML = """
         <ul id="list"></ul>`;
 
       const list = document.getElementById("list");
-      list.addEventListener("click", e => {
-        if (e.target.matches("button[data-filename]")) {
-          deleteDoc(e.target, e.target.dataset.filename);
-        }
-      });
 
       for (const doc of data.documents) {
         const li = document.createElement("li");
         li.innerHTML = `
-          <div class="article-text">
-            <div class="title">${escapeHtml(doc.title)}</div>
-            ${doc.snippet ? `<div class="snippet">${escapeHtml(doc.snippet)}</div>` : ""}
-          </div>
-          <button data-filename="${escapeHtml(doc.filename)}">Delete</button>`;
+          <div class="title">${escapeHtml(doc.title)}</div>
+          ${doc.snippet ? `<div class="snippet">${escapeHtml(doc.snippet)}</div>` : ""}`;
         list.appendChild(li);
-      }
-    }
-
-    async function deleteDoc(btn, filename) {
-      if (!confirm(`Delete "${filename}" from your Kindle?`)) return;
-
-      btn.disabled = true;
-      btn.textContent = "Deleting…";
-
-      const res = await fetch("/api/documents/" + encodeURIComponent(filename), {
-        method: "DELETE"
-      });
-
-      if (res.ok) {
-        const li = btn.closest("li");
-        li.remove();
-        const remaining = document.querySelectorAll("#list li").length;
-        if (remaining === 0) {
-          document.getElementById("root").innerHTML = emptyState();
-        } else {
-          document.getElementById("count").textContent = `${remaining} article${remaining === 1 ? "" : "s"}`;
-        }
-      } else {
-        btn.disabled = false;
-        btn.textContent = "Delete";
-        alert("Could not delete article. Is your Kindle still connected?");
       }
     }
 
@@ -231,20 +171,6 @@ def api_list():
         "connected": True,
         "documents": [{"title": d.title, "filename": d.filename, "snippet": d.snippet} for d in docs],
     })
-
-
-@app.route("/api/documents/<path:filename>", methods=["DELETE"])
-def api_delete(filename):
-    if not kindle_device.is_connected():
-        return jsonify({"error": "Kindle not connected"}), 503
-
-    try:
-        kindle_device.delete_document(filename)
-        return jsonify({"ok": True})
-    except FileNotFoundError:
-        return jsonify({"error": "File not found"}), 404
-
-
 def open_browser():
     webbrowser.open("http://localhost:5001")
 

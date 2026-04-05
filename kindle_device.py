@@ -2,7 +2,6 @@
 
 import json
 import re
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,15 +90,3 @@ def list_documents() -> list[Document]:
         docs.append(Document(title=title, filename=path.name, snippet=snippet))
 
     return docs
-
-
-def delete_document(filename: str) -> None:
-    """Delete a document and its .sdr sidecar from the Kindle."""
-    doc_path = DOCUMENTS_DIR / filename
-    doc_path.unlink()  # raises FileNotFoundError if not found
-
-    sidecar = DOCUMENTS_DIR / (Path(filename).stem + ".sdr")
-    try:
-        shutil.rmtree(sidecar)
-    except FileNotFoundError:
-        pass
