@@ -66,6 +66,10 @@ def _strip_webp(url: str) -> str:
     return url
 
 
+def _count_html_tags(content: str, tag: str) -> int:
+    return len(re.findall(rf"<{tag}\b", content, re.IGNORECASE))
+
+
 def _unwrap_next_image(url: str) -> str:
     """Extract the real image URL from a Next.js /_next/image?url=... proxy URL."""
     if "/_next/image" in url:
@@ -73,6 +77,254 @@ def _unwrap_next_image(url: str) -> str:
         if "url" in params:
             return unquote(params["url"][0])
     return url
+
+
+def _pick_raw_content_node(raw_html: str):
+    """Pick the most article-like node from the raw HTML."""
+    tree = lhtml.fromstring(raw_html)
+    class_matchers = [
+        "w-richtext",
+        "richtext",
+        "rich-text",
+        "article-body",
+        "article-content",
+        "post-content",
+        "entry-content",
+        "content-body",
+        "prose",
+    ]
+    candidates = []
+    seen = set()
+
+    xpaths = [".//article", ".//main"]
+    xpaths.extend(
+        [
+            (
+                ".//*[contains("
+                'concat(" ", normalize-space(@class), " "),'
+                f' " {class_name} "'
+                ")]"
+            )
+            for class_name in class_matchers
+        ]
+    )
+
+    for xpath in xpaths:
+        for node in tree.xpath(xpath):
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            text = " ".join(node.itertext()).strip()
+            if len(text) < 400:
+                continue
+            score = len(text)
+            score += len(node.xpath(".//p")) * 150
+            score += len(node.xpath(".//li")) * 220
+            score += len(node.xpath(".//img")) * 200
+            score += len(node.xpath(".//h1|.//h2|.//h3")) * 120
+            candidates.append((score, node))
+
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+    return tree.find(".//article") or tree.find(".//main")
+
+
+def _inline_to_html(node, base_url: str) -> str:
+    parts = [html_escape(node.text or "")]
+    for child in node:
+        parts.append(_node_to_html(child, base_url))
+    return "".join(parts)
+
+
+def _node_to_html(node, base_url: str) -> str:
+    tag = (node.tag or "").lower() if isinstance(node.tag, str) else ""
+    tail = html_escape(node.tail or "")
+
+    if not tag:
+        return tail
+
+    if tag in {"div", "section", "article", "main"}:
+        return _inline_to_html(node, base_url) + tail
+    if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return f"<{tag}>{_inline_to_html(node, base_url)}</{tag}>\n" + tail
+    if tag == "p":
+        return f"<p>{_inline_to_html(node, base_url)}</p>\n" + tail
+    if tag == "blockquote":
+        return f"<blockquote>{_inline_to_html(node, base_url)}</blockquote>\n" + tail
+    if tag == "pre":
+        text = html_escape("".join(node.itertext()))
+        return f"<pre><code>{text}</code></pre>\n" + tail
+    if tag == "code":
+        return f"<code>{_inline_to_html(node, base_url)}</code>{tail}"
+    if tag == "ul":
+        items = "".join(_node_to_html(child, base_url) for child in node if getattr(child, "tag", None) == "li")
+        return f"<ul>{items}</ul>\n" + tail
+    if tag == "ol":
+        items = "".join(_node_to_html(child, base_url) for child in node if getattr(child, "tag", None) == "li")
+        return f"<ol>{items}</ol>\n" + tail
+    if tag == "li":
+        content = _inline_to_html(node, base_url).strip()
+        return f"<li>{content}</li>\n" + tail if content else tail
+    if tag in {"strong", "b"}:
+        return f"<strong>{_inline_to_html(node, base_url)}</strong>{tail}"
+    if tag in {"em", "i"}:
+        return f"<em>{_inline_to_html(node, base_url)}</em>{tail}"
+    if tag == "a":
+        href = node.get("href", "").strip()
+        if href:
+            href = html_escape(urljoin(base_url, href), quote=True)
+            return f'<a href="{href}">{_inline_to_html(node, base_url)}</a>{tail}'
+        return _inline_to_html(node, base_url) + tail
+    if tag == "br":
+        return "<br/>\n" + tail
+    if tag == "figure":
+        inner = "".join(_node_to_html(child, base_url) for child in node)
+        return f"<figure>{inner}</figure>\n" + tail if inner.strip() else tail
+    if tag == "figcaption":
+        return f"<figcaption>{_inline_to_html(node, base_url)}</figcaption>\n" + tail
+    if tag == "img":
+        src = node.get("srcset", "").strip()
+        src = _pick_srcset_url(src) if src else node.get("src", "").strip()
+        if not src or src.startswith("data:"):
+            return tail
+        abs_url = _strip_webp(_unwrap_next_image(urljoin(base_url, src)))
+        if not abs_url.startswith(("http://", "https://")) or _SKIP_IMAGE.search(abs_url):
+            return tail
+        alt = html_escape(node.get("alt", ""), quote=True)
+        return f'<img src="{html_escape(abs_url, quote=True)}" alt="{alt}"/>' + tail
+    if tag == "hr":
+        return "<hr/>\n" + tail
+
+    return _inline_to_html(node, base_url) + tail
+
+
+def _node_to_markdown(node, base_url: str, list_depth: int = 0) -> str:
+    tag = (node.tag or "").lower() if isinstance(node.tag, str) else ""
+    tail = node.tail or ""
+
+    if not tag:
+        return tail
+
+    if tag in {"div", "section", "article", "main"}:
+        return "".join(_node_to_markdown(child, base_url, list_depth=list_depth) for child in node)
+    if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        level = int(tag[1])
+        inner = _markdown_inline(node, base_url).strip()
+        return f'{"#" * level} {inner}\n\n' if inner else ""
+    if tag == "p":
+        inner = _markdown_inline(node, base_url).strip()
+        return f"{inner}\n\n" if inner else ""
+    if tag == "blockquote":
+        inner = _markdown_inline(node, base_url).strip()
+        if not inner:
+            return ""
+        lines = "\n".join(f"> {line}" for line in inner.splitlines())
+        return f"{lines}\n\n"
+    if tag == "pre":
+        text = "".join(node.itertext()).strip("\n")
+        return f"```\n{text}\n```\n\n" if text else ""
+    if tag == "ul":
+        return "".join(_node_to_markdown(child, base_url, list_depth=list_depth + 1) for child in node if getattr(child, "tag", None) == "li") + "\n"
+    if tag == "ol":
+        chunks = []
+        for index, child in enumerate([c for c in node if getattr(c, "tag", None) == "li"], start=1):
+            chunks.append(_node_to_markdown(child, base_url, list_depth=list_depth + 1).replace("- ", f"{index}. ", 1))
+        return "".join(chunks) + "\n"
+    if tag == "li":
+        inner = _markdown_inline(node, base_url).strip()
+        if not inner:
+            return ""
+        indent = "  " * max(list_depth - 1, 0)
+        return f"{indent}- {inner}\n"
+    if tag == "figure":
+        return "".join(_node_to_markdown(child, base_url, list_depth=list_depth) for child in node)
+    if tag == "img":
+        src = node.get("srcset", "").strip()
+        src = _pick_srcset_url(src) if src else node.get("src", "").strip()
+        if not src or src.startswith("data:"):
+            return ""
+        abs_url = _strip_webp(_unwrap_next_image(urljoin(base_url, src)))
+        if not abs_url.startswith(("http://", "https://")) or _SKIP_IMAGE.search(abs_url):
+            return ""
+        alt = (node.get("alt", "") or "").strip()
+        return f"![{alt}]({abs_url})\n\n"
+    if tag == "hr":
+        return "---\n\n"
+
+    return _markdown_inline(node, base_url) + tail
+
+
+def _markdown_inline(node, base_url: str) -> str:
+    parts = [node.text or ""]
+    for child in node:
+        tag = (child.tag or "").lower() if isinstance(child.tag, str) else ""
+        if tag in {"strong", "b"}:
+            parts.append(f"**{_markdown_inline(child, base_url).strip()}**")
+        elif tag in {"em", "i"}:
+            parts.append(f"*{_markdown_inline(child, base_url).strip()}*")
+        elif tag == "code":
+            parts.append(f"`{''.join(child.itertext()).strip()}`")
+        elif tag == "a":
+            text = _markdown_inline(child, base_url).strip()
+            href = child.get("href", "").strip()
+            href = urljoin(base_url, href) if href else ""
+            parts.append(f"[{text}]({href})" if text and href else text)
+        elif tag == "br":
+            parts.append("\n")
+        elif tag in {"ul", "ol", "li", "p", "blockquote", "figure", "img"}:
+            parts.append(_node_to_markdown(child, base_url).strip())
+        else:
+            parts.append(_markdown_inline(child, base_url))
+        parts.append(child.tail or "")
+    return "".join(parts)
+
+
+def _extract_raw_preserved_content(raw_html: str, base_url: str) -> tuple[str, str]:
+    """Extract minimally sanitized HTML and markdown from raw article markup."""
+    node = _pick_raw_content_node(raw_html)
+    if node is None:
+        return "", ""
+
+    html = "".join(_node_to_html(child, base_url) for child in node).strip()
+    markdown = "".join(_node_to_markdown(child, base_url) for child in node).strip()
+    return html, markdown
+
+
+def _should_prefer_raw_content(extracted_html: str, raw_html_content: str) -> bool:
+    """Prefer raw-preserved content when trafilatura drops key structure."""
+    if not raw_html_content:
+        return False
+
+    extracted_text = re.sub(r"<[^>]+>", "", extracted_html or "")
+    raw_text = re.sub(r"<[^>]+>", "", raw_html_content)
+    if len(raw_text.strip()) < max(500, int(len(extracted_text.strip()) * 0.7)):
+        return False
+
+    extracted_has_lists = any(_count_html_tags(extracted_html, tag) for tag in ("ul", "ol", "li"))
+    raw_has_lists = any(_count_html_tags(raw_html_content, tag) for tag in ("ul", "ol", "li"))
+    extracted_has_images = _count_html_tags(extracted_html, "img") > 0
+    raw_has_images = _count_html_tags(raw_html_content, "img") > 0
+
+    return (raw_has_lists and not extracted_has_lists) or (raw_has_images and not extracted_has_images)
+
+
+def _should_prefer_raw_markdown(extracted_markdown: str, raw_markdown: str) -> bool:
+    if not raw_markdown:
+        return False
+
+    extracted_text = re.sub(r"[#*_`!\[\]\(\)-]", "", extracted_markdown or "")
+    raw_text = re.sub(r"[#*_`!\[\]\(\)-]", "", raw_markdown)
+    if len(raw_text.strip()) < max(500, int(len(extracted_text.strip()) * 0.7)):
+        return False
+
+    extracted_has_lists = bool(re.search(r"(?m)^\s*(?:[-*]|\d+\.)\s+", extracted_markdown or ""))
+    raw_has_lists = bool(re.search(r"(?m)^\s*(?:[-*]|\d+\.)\s+", raw_markdown))
+    extracted_has_images = bool(re.search(r"!\[[^\]]*\]\([^)]+\)", extracted_markdown or ""))
+    raw_has_images = bool(re.search(r"!\[[^\]]*\]\([^)]+\)", raw_markdown))
+
+    return (raw_has_lists and not extracted_has_lists) or (raw_has_images and not extracted_has_images)
 
 
 def _xml_to_html(xml_str: str, base_url: str) -> str:
@@ -231,6 +483,8 @@ def fetch_article(url: str, include_images: bool = True) -> tuple[str, str]:
         m = re.search(r"<title[^>]*>([^<]+)</title>", raw_html, re.IGNORECASE)
         title = m.group(1).strip() if m else "Article"
 
+    raw_preserved_html, raw_preserved_markdown = _extract_raw_preserved_content(raw_html, url)
+
     if include_images:
         # XML mode preserves <graphic> positions — convert to HTML with img srcs in place
         xml = trafilatura.extract(
@@ -263,10 +517,16 @@ def fetch_article(url: str, include_images: bool = True) -> tuple[str, str]:
     if not content:
         raise ValueError("Could not extract article content from page.")
 
+    if _should_prefer_raw_content(content, raw_preserved_html):
+        content = raw_preserved_html
+
     markdown = trafilatura.extract(
         raw_html, output_format="markdown", include_images=False,
         include_links=True, url=url,
     ) or ""
+
+    if _should_prefer_raw_markdown(markdown, raw_preserved_markdown):
+        markdown = raw_preserved_markdown
 
     return title, content, markdown
 
