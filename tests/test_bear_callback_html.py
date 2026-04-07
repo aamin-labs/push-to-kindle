@@ -20,12 +20,12 @@ sys.modules.setdefault("lxml", lxml)
 sys.modules.setdefault("lxml.etree", lxml.etree)
 sys.modules.setdefault("lxml.html", lxml.html)
 
-import send_to_kindle
+import app_helpers
 
 
 class BearCallbackHtmlTests(unittest.TestCase):
     def test_callback_page_tries_to_close_tab(self):
-        html = send_to_kindle._bear_callback_html()
+        html = app_helpers.bear_callback_html()
         self.assertIn("window.close()", html)
         self.assertIn('location.replace("about:blank")', html)
         self.assertIn("Bear callback complete.", html)

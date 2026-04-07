@@ -4,17 +4,23 @@ import unittest
 
 os.environ.setdefault("KINDLE_EMAIL", "test@kindle.com")
 
-for module_name in ("send_to_kindle", "lxml", "lxml.etree", "lxml.html", "trafilatura", "requests", "dotenv"):
+for module_name in ("article_pipeline", "lxml", "lxml.etree", "lxml.html", "trafilatura", "requests", "dotenv"):
     sys.modules.pop(module_name, None)
 
 try:
-    import send_to_kindle
+    import article_pipeline
 except ModuleNotFoundError:
-    send_to_kindle = None
+    article_pipeline = None
+
+try:
+    from lxml import html as _lxml_html  # noqa: F401
+except ModuleNotFoundError:
+    _lxml_html = None
 
 
-@unittest.skipIf(send_to_kindle is None, "runtime deps not installed")
+@unittest.skipIf(article_pipeline is None, "runtime deps not installed")
 class ExtractionRepairTests(unittest.TestCase):
+    @unittest.skipIf(_lxml_html is None, "lxml not installed")
     def test_raw_preserved_content_keeps_lists_and_images(self):
         filler = (
             "This article section contains enough supporting detail to look like a real blog post body, "
@@ -37,7 +43,7 @@ class ExtractionRepairTests(unittest.TestCase):
           </body>
         </html>
         """
-        html, markdown = send_to_kindle._extract_raw_preserved_content(
+        html, markdown = article_pipeline.extract_raw_preserved_content(
             raw_html, "https://example.com/article"
         )
 
@@ -69,9 +75,9 @@ class ExtractionRepairTests(unittest.TestCase):
             "<p>Either way, testing turns a skill that seems to work into one you know works.</p>"
         )
 
-        self.assertTrue(send_to_kindle._should_prefer_raw_content(extracted_html, raw_html))
+        self.assertTrue(article_pipeline.should_prefer_raw_content(extracted_html, raw_html))
         self.assertTrue(
-            send_to_kindle._should_prefer_raw_markdown(
+            article_pipeline.should_prefer_raw_markdown(
                 f"This distinction matters.\n\n{filler}\n\nEither way, testing turns a skill that seems to work into one you know works.\n",
                 f"This distinction matters.\n\n{filler}\n\n- Capability uplift skills may become less necessary as models improve.\n\n![Diagram](https://example.com/image.png)\n",
             )
