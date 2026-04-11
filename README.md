@@ -125,7 +125,7 @@ else
 fi
 ```
 
-This path attaches the selected file unchanged and sends it with the same Gmail SMTP settings. Kindle file compatibility is handled by Amazon's Personal Documents service.
+This path attaches the selected file with the same Gmail SMTP settings. Markdown files (`.md` / `.markdown`) are sent as `.txt` attachments because Kindle does not handle Markdown reliably; other files are sent unchanged. Kindle file compatibility is handled by Amazon's Personal Documents service.
 
 ## How it works
 
@@ -139,8 +139,8 @@ This path attaches the selected file unchanged and sends it with the same Gmail 
 
 **Selected file path (Finder / Alfred File Action):**
 1. Validates the selected path is a readable file
-2. Attaches the original file bytes without conversion
-3. Sends the attachment via SMTP using the original filename
+2. Sends Markdown files as `.txt` attachments without changing the source file
+3. Sends other attachments via SMTP using the original filename
 4. Skips Bear note creation and article metadata sync
 
 **defuddle.md path (hard-to-extract articles, e.g. X/Twitter):**

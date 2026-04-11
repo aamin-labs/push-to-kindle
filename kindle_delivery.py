@@ -27,6 +27,13 @@ class DeliveryResult:
     bear_note_id: str | None = None
 
 
+@dataclass
+class FileAttachment:
+    filename: str
+    mime_type: tuple[str, str]
+    extension: str
+
+
 class ArticleMetadataStore:
     def __init__(
         self,
@@ -157,7 +164,7 @@ class KindleDeliveryService:
             raise ValueError(f"Path is not a file: {file_path}")
 
         title = file_path.stem
-        mime_type = _guess_mime_type(file_path)
+        attachment = _prepare_file_attachment(file_path)
         if dry_run:
             print(f"Dry run — would send file to Kindle: {file_path}")
             return DeliveryResult(title=title, delivered_format="dry-run", output_path=str(file_path))
@@ -166,11 +173,11 @@ class KindleDeliveryService:
         self._smtp_sender.send_attachment(
             title,
             file_path.read_bytes(),
-            mime_type,
-            file_path.suffix.lstrip(".") or "bin",
-            filename=file_path.name,
+            attachment.mime_type,
+            attachment.extension,
+            filename=attachment.filename,
         )
-        print(f"Sent to Kindle: {file_path.name}")
+        print(f"Sent to Kindle: {attachment.filename}")
         return DeliveryResult(title=title, delivered_format="file", output_path=str(file_path))
 
     def _deliver(self, article: ExtractedArticle, *, dry_run: bool) -> DeliveryResult:
@@ -267,6 +274,20 @@ def _guess_mime_type(path: Path) -> tuple[str, str]:
         return ("application", "octet-stream")
     main_type, sub_type = guessed_type.split("/", 1)
     return (main_type, sub_type)
+
+
+def _prepare_file_attachment(path: Path) -> FileAttachment:
+    if path.suffix.lower() in {".md", ".markdown"}:
+        return FileAttachment(
+            filename=f"{path.stem}.txt",
+            mime_type=("text", "plain"),
+            extension="txt",
+        )
+    return FileAttachment(
+        filename=path.name,
+        mime_type=_guess_mime_type(path),
+        extension=path.suffix.lstrip(".") or "bin",
+    )
 
 
 def load_delivery_service(extractor) -> KindleDeliveryService:

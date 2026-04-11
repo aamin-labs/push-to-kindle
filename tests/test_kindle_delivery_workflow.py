@@ -134,6 +134,29 @@ class KindleDeliveryWorkflowTests(unittest.TestCase):
         self.assertEqual(("application", "octet-stream"), self.smtp.sent[0][2])
         self.assertEqual("unknownkindle", self.smtp.sent[0][3])
 
+    def test_deliver_file_sends_markdown_as_txt_attachment(self):
+        file_path = Path(self.tmpdir.name) / "Notes.md"
+        file_path.write_bytes(b"# Heading\n\n- item\n")
+
+        result = self.service.deliver_file(str(file_path))
+
+        self.assertEqual("file", result.delivered_format)
+        self.assertEqual("Notes", result.title)
+        self.assertEqual(
+            ("Notes", b"# Heading\n\n- item\n", ("text", "plain"), "txt", "Notes.txt"),
+            self.smtp.sent[0],
+        )
+
+    def test_deliver_file_sends_markdown_extension_case_insensitively_as_txt(self):
+        file_path = Path(self.tmpdir.name) / "Draft.MARKDOWN"
+        file_path.write_bytes(b"draft body")
+
+        self.service.deliver_file(str(file_path))
+
+        self.assertEqual(("text", "plain"), self.smtp.sent[0][2])
+        self.assertEqual("txt", self.smtp.sent[0][3])
+        self.assertEqual("Draft.txt", self.smtp.sent[0][4])
+
     def test_deliver_file_dry_run_validates_without_sending(self):
         file_path = Path(self.tmpdir.name) / "book.epub"
         file_path.write_bytes(b"epub")
