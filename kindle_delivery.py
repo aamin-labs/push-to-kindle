@@ -14,7 +14,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
-from article_pipeline import ExtractedArticle, markdown_to_epub, rewrite_x_url, safe_filename
+from article_pipeline import ExtractedArticle, markdown_to_epub, safe_filename
 from app_helpers import BearClient, JsonDictStore
 
 
@@ -129,13 +129,8 @@ class KindleDeliveryService:
         self._epub_converter = epub_converter
 
     def deliver_url(self, url: str, *, include_images: bool = True, dry_run: bool = False) -> DeliveryResult:
-        rewritten = rewrite_x_url(url)
-        if rewritten.startswith("https://defuddle.md/"):
-            print(f"Fetching via defuddle.md: {rewritten}")
-            article = self._extractor.extract_defuddle(rewritten)
-        else:
-            print(f"Fetching: {rewritten}")
-            article = self._extractor.extract_url(rewritten, include_images=include_images)
+        print(f"Fetching: {url}")
+        article = self._extractor.prepare_for_kindle(url, include_images=include_images)
         print(f"Extracted: {article.title!r}")
         return self._deliver(article, dry_run=dry_run)
 
@@ -147,7 +142,7 @@ class KindleDeliveryService:
         dry_run: bool = False,
     ) -> DeliveryResult:
         print(f"Reading: {path}")
-        article = self._extractor.read_html_file(path, title_override=title_override)
+        article = self._extractor.prepare_local_html(path, title_override=title_override)
         return self._deliver(article, dry_run=dry_run)
 
     def _deliver(self, article: ExtractedArticle, *, dry_run: bool) -> DeliveryResult:

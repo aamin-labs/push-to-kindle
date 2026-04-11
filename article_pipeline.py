@@ -491,7 +491,25 @@ def _fetch_raw_html(url: str) -> str:
 
 
 class ArticleExtractor:
+    def prepare_for_kindle(self, url: str, *, include_images: bool = True) -> ExtractedArticle:
+        rewritten = rewrite_x_url(url)
+        if rewritten.startswith("https://defuddle.md/"):
+            return self._extract_defuddle(rewritten)
+        return self._extract_url(rewritten, include_images=include_images)
+
+    def prepare_local_html(self, path: str, *, title_override: str | None = None) -> ExtractedArticle:
+        return self._read_html_file(path, title_override=title_override)
+
     def extract_url(self, url: str, *, include_images: bool = True) -> ExtractedArticle:
+        return self._extract_url(url, include_images=include_images)
+
+    def extract_defuddle(self, url: str) -> ExtractedArticle:
+        return self._extract_defuddle(url)
+
+    def read_html_file(self, path: str, *, title_override: str | None = None) -> ExtractedArticle:
+        return self._read_html_file(path, title_override=title_override)
+
+    def _extract_url(self, url: str, *, include_images: bool = True) -> ExtractedArticle:
         trafilatura = _trafilatura_module()
         raw_html = _fetch_raw_html(url)
 
@@ -550,7 +568,7 @@ class ArticleExtractor:
             delivery_format="html",
         )
 
-    def extract_defuddle(self, url: str) -> ExtractedArticle:
+    def _extract_defuddle(self, url: str) -> ExtractedArticle:
         requests = _requests_module()
         resp = requests.get(url, timeout=20, headers=_BROWSER_HEADERS)
         ct = resp.headers.get("Content-Type", "")
@@ -585,7 +603,7 @@ class ArticleExtractor:
             delivery_format="epub",
         )
 
-    def read_html_file(self, path: str, *, title_override: str | None = None) -> ExtractedArticle:
+    def _read_html_file(self, path: str, *, title_override: str | None = None) -> ExtractedArticle:
         content = Path(path).read_text(encoding="utf-8").strip()
         if title_override:
             title = title_override

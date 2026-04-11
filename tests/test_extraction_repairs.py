@@ -142,12 +142,27 @@ class ExtractionRepairTests(unittest.TestCase):
         ), mock.patch.object(article_pipeline, "_requests_module") as requests_module:
             requests_module.return_value.get.return_value = fake_response
 
-            article = article_pipeline.ArticleExtractor().extract_url(
+            article = article_pipeline.ArticleExtractor().prepare_for_kindle(
                 "https://example.com/article", include_images=True
             )
 
         self.assertIn('src="data:image/png;base64,', article.html_content)
         self.assertNotIn('src="https://example.com/image.png"', article.html_content)
+
+    def test_prepare_for_kindle_routes_x_urls_through_defuddle(self):
+        extractor = article_pipeline.ArticleExtractor()
+        expected = article_pipeline.ExtractedArticle(
+            title="Thread",
+            source_url="https://x.com/example/status/1",
+            markdown_content="# Thread",
+            delivery_format="epub",
+        )
+
+        with mock.patch.object(extractor, "_extract_defuddle", return_value=expected) as extract_defuddle:
+            article = extractor.prepare_for_kindle("https://x.com/example/status/1")
+
+        self.assertEqual(expected, article)
+        extract_defuddle.assert_called_once_with("https://defuddle.md/x.com/example/status/1")
 
 
 if __name__ == "__main__":

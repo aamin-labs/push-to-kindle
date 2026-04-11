@@ -5,13 +5,7 @@ import argparse
 from pathlib import Path
 
 from app_helpers import bear_callback_html
-from article_pipeline import (
-    ArticleExtractor,
-    extract_raw_preserved_content,
-    rewrite_x_url,
-    should_prefer_raw_content,
-    should_prefer_raw_markdown,
-)
+from article_pipeline import ArticleExtractor
 from kindle_delivery import load_delivery_service
 
 
@@ -25,12 +19,6 @@ def _load_dotenv() -> None:
 
 def _bear_callback_html() -> str:
     return bear_callback_html()
-
-
-_extract_raw_preserved_content = extract_raw_preserved_content
-_should_prefer_raw_content = should_prefer_raw_content
-_should_prefer_raw_markdown = should_prefer_raw_markdown
-_rewrite_x_url = rewrite_x_url
 
 
 def main() -> None:
