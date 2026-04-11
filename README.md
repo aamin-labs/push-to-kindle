@@ -40,6 +40,9 @@ python3 send_to_kindle.py --no-images "https://example.com/article"
 
 # Preview extraction locally without sending
 python3 send_to_kindle.py --dry-run "https://example.com/article"
+
+# Send a local file directly to Kindle
+python3 send_file_to_kindle.py "/path/to/book.pdf"
 ```
 
 The article is extracted, wrapped in a clean HTML document, and delivered to your Kindle. It appears on your device within a minute or two.
@@ -101,6 +104,29 @@ fi
 
 The script grabs the active tab URL from Brave automatically and passes it to the Python script. defuddle.md URLs are handled natively by the script (see below). Falls back to clipboard if Brave isn't frontmost.
 
+### Alfred file action
+
+Send a selected Finder file directly to Kindle:
+
+1. Create a new Alfred workflow with a **File Action** input
+2. Connect it to a **Run Script** action (`/bin/bash`) with:
+
+```bash
+PROJECT_DIR="/Users/yourname/dev/projects/push-to-kindle"
+
+result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_file_to_kindle.py" "$1" 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+    notification=$(echo "$result" | tail -1)
+    osascript -e "display notification \"$notification\" with title \"Sent to Kindle\""
+else
+    osascript -e "display alert \"Push to Kindle Failed\" message \"$result\" as critical"
+fi
+```
+
+This path attaches the selected file unchanged and sends it with the same Gmail SMTP settings. Kindle file compatibility is handled by Amazon's Personal Documents service.
+
 ## How it works
 
 **URL path (normal articles):**
@@ -110,6 +136,12 @@ The script grabs the active tab URL from Brave automatically and passes it to th
 4. Wraps it in a minimal HTML document with readable typography
 5. Sends it via SMTP
 6. Creates a Bear note tagged `#0a/reading` with the article Markdown body (macOS, URL path only)
+
+**Selected file path (Finder / Alfred File Action):**
+1. Validates the selected path is a readable file
+2. Attaches the original file bytes without conversion
+3. Sends the attachment via SMTP using the original filename
+4. Skips Bear note creation and article metadata sync
 
 **defuddle.md path (hard-to-extract articles, e.g. X/Twitter):**
 1. Script detects `https://defuddle.md/*` URLs automatically, and rewrites direct `https://x.com/*` URLs to `https://defuddle.md/x.com/*`

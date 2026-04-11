@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import mimetypes
 import os
 import smtplib
 import sys
@@ -84,6 +85,8 @@ class SmtpSender:
         attachment_bytes: bytes,
         mime_type: tuple[str, str],
         extension: str,
+        *,
+        filename: str | None = None,
     ) -> None:
         if not self.kindle_email:
             raise RuntimeError("KINDLE_EMAIL must be set in .env.")
@@ -99,7 +102,8 @@ class SmtpSender:
         part = MIMEBase(*mime_type)
         part.set_payload(attachment_bytes)
         encoders.encode_base64(part)
-        part.add_header("Content-Disposition", "attachment", filename=f"{safe_filename(title)}.{extension}")
+        attachment_filename = filename or f"{safe_filename(title)}.{extension}"
+        part.add_header("Content-Disposition", "attachment", filename=attachment_filename)
         msg.attach(part)
 
         with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
@@ -144,6 +148,30 @@ class KindleDeliveryService:
         print(f"Reading: {path}")
         article = self._extractor.prepare_local_html(path, title_override=title_override)
         return self._deliver(article, dry_run=dry_run)
+
+    def deliver_file(self, path: str, *, dry_run: bool = False) -> DeliveryResult:
+        file_path = Path(path).expanduser().resolve()
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        if not file_path.is_file():
+            raise ValueError(f"Path is not a file: {file_path}")
+
+        title = file_path.stem
+        mime_type = _guess_mime_type(file_path)
+        if dry_run:
+            print(f"Dry run — would send file to Kindle: {file_path}")
+            return DeliveryResult(title=title, delivered_format="dry-run", output_path=str(file_path))
+
+        print(f"Sending file: {file_path}")
+        self._smtp_sender.send_attachment(
+            title,
+            file_path.read_bytes(),
+            mime_type,
+            file_path.suffix.lstrip(".") or "bin",
+            filename=file_path.name,
+        )
+        print(f"Sent to Kindle: {file_path.name}")
+        return DeliveryResult(title=title, delivered_format="file", output_path=str(file_path))
 
     def _deliver(self, article: ExtractedArticle, *, dry_run: bool) -> DeliveryResult:
         if article.delivery_format == "epub":
@@ -231,6 +259,14 @@ def wrap_html(title: str, content: str) -> str:
         </html>
         """
     )
+
+
+def _guess_mime_type(path: Path) -> tuple[str, str]:
+    guessed_type, _ = mimetypes.guess_type(path.name)
+    if not guessed_type:
+        return ("application", "octet-stream")
+    main_type, sub_type = guessed_type.split("/", 1)
+    return (main_type, sub_type)
 
 
 def load_delivery_service(extractor) -> KindleDeliveryService:

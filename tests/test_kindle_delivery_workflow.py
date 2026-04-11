@@ -43,8 +43,8 @@ class FakeSmtpSender:
     def __init__(self):
         self.sent = []
 
-    def send_attachment(self, title, attachment_bytes, mime_type, extension):
-        self.sent.append((title, attachment_bytes, mime_type, extension))
+    def send_attachment(self, title, attachment_bytes, mime_type, extension, *, filename=None):
+        self.sent.append((title, attachment_bytes, mime_type, extension, filename))
 
 
 class FakeBearClient:
@@ -107,6 +107,51 @@ class KindleDeliveryWorkflowTests(unittest.TestCase):
         self.assertTrue(Path(result.output_path).exists())
         self.assertEqual([], self.smtp.sent)
         self.assertEqual([], self.bear.created)
+
+    def test_deliver_file_sends_exact_bytes_and_preserves_filename(self):
+        file_path = Path(self.tmpdir.name) / "Kindle Draft.pdf"
+        file_path.write_bytes(b"%PDF-1.4 bytes")
+
+        result = self.service.deliver_file(str(file_path))
+
+        self.assertEqual("file", result.delivered_format)
+        self.assertEqual("Kindle Draft", result.title)
+        self.assertEqual(str(file_path.resolve()), result.output_path)
+        self.assertEqual([], self.extractor.calls)
+        self.assertEqual([], self.bear.created)
+        self.assertEqual(1, len(self.smtp.sent))
+        self.assertEqual(
+            ("Kindle Draft", b"%PDF-1.4 bytes", ("application", "pdf"), "pdf", "Kindle Draft.pdf"),
+            self.smtp.sent[0],
+        )
+
+    def test_deliver_file_falls_back_to_octet_stream_for_unknown_extension(self):
+        file_path = Path(self.tmpdir.name) / "notes.unknownkindle"
+        file_path.write_bytes(b"raw")
+
+        self.service.deliver_file(str(file_path))
+
+        self.assertEqual(("application", "octet-stream"), self.smtp.sent[0][2])
+        self.assertEqual("unknownkindle", self.smtp.sent[0][3])
+
+    def test_deliver_file_dry_run_validates_without_sending(self):
+        file_path = Path(self.tmpdir.name) / "book.epub"
+        file_path.write_bytes(b"epub")
+
+        result = self.service.deliver_file(str(file_path), dry_run=True)
+
+        self.assertEqual("dry-run", result.delivered_format)
+        self.assertEqual(str(file_path.resolve()), result.output_path)
+        self.assertEqual([], self.smtp.sent)
+        self.assertEqual([], self.bear.created)
+
+    def test_deliver_file_rejects_missing_path(self):
+        with self.assertRaises(FileNotFoundError):
+            self.service.deliver_file(str(Path(self.tmpdir.name) / "missing.pdf"))
+
+    def test_deliver_file_rejects_directory_path(self):
+        with self.assertRaises(ValueError):
+            self.service.deliver_file(self.tmpdir.name)
 
 
 if __name__ == "__main__":
