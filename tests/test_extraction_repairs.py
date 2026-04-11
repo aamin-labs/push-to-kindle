@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 os.environ.setdefault("KINDLE_EMAIL", "test@kindle.com")
 
@@ -20,6 +21,27 @@ except ModuleNotFoundError:
 
 @unittest.skipIf(article_pipeline is None, "runtime deps not installed")
 class ExtractionRepairTests(unittest.TestCase):
+    def test_fetch_raw_html_falls_back_after_trafilatura_403(self):
+        trafilatura_error = RuntimeError("403 Client Error: Forbidden for url: https://example.com/article")
+        fake_response = mock.Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.text = "<html><body>ok</body></html>"
+
+        with mock.patch.object(article_pipeline, "_trafilatura_module") as trafilatura_module, mock.patch.object(
+            article_pipeline, "_requests_module"
+        ) as requests_module:
+            trafilatura_module.return_value.fetch_url.side_effect = trafilatura_error
+            requests_module.return_value.get.return_value = fake_response
+
+            html = article_pipeline._fetch_raw_html("https://example.com/article")
+
+        self.assertEqual("<html><body>ok</body></html>", html)
+        requests_module.return_value.get.assert_called_once_with(
+            "https://example.com/article",
+            timeout=15,
+            headers=article_pipeline._BROWSER_HEADERS,
+        )
+
     @unittest.skipIf(_lxml_html is None, "lxml not installed")
     def test_raw_preserved_content_keeps_lists_and_images(self):
         filler = (
@@ -82,6 +104,50 @@ class ExtractionRepairTests(unittest.TestCase):
                 f"This distinction matters.\n\n{filler}\n\n- Capability uplift skills may become less necessary as models improve.\n\n![Diagram](https://example.com/image.png)\n",
             )
         )
+
+    def test_raw_fallback_embeds_images_when_including_images(self):
+        filler = (
+            "Managed agents need durable article extraction behavior, including images that remain available "
+            "after the document is delivered to a Kindle device. "
+        ) * 8
+        extracted_html = f"<p>{filler}</p>"
+        raw_html_content = (
+            f"<p>{filler}</p>"
+            '<figure><img src="https://example.com/image.png" alt="Diagram"/></figure>'
+        )
+
+        fake_trafilatura = mock.Mock()
+        fake_trafilatura.bare_extraction.return_value = mock.Mock(title="Article")
+
+        def extract(*args, **kwargs):
+            output_format = kwargs["output_format"]
+            if output_format == "xml":
+                return ""
+            if output_format == "html":
+                return extracted_html
+            if output_format == "markdown":
+                return filler
+            return ""
+
+        fake_trafilatura.extract.side_effect = extract
+        fake_response = mock.Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.headers = {"Content-Type": "image/png"}
+        fake_response.content = b"image-bytes"
+
+        with mock.patch.object(article_pipeline, "_fetch_raw_html", return_value="<html></html>"), mock.patch.object(
+            article_pipeline, "_trafilatura_module", return_value=fake_trafilatura
+        ), mock.patch.object(
+            article_pipeline, "extract_raw_preserved_content", return_value=(raw_html_content, filler)
+        ), mock.patch.object(article_pipeline, "_requests_module") as requests_module:
+            requests_module.return_value.get.return_value = fake_response
+
+            article = article_pipeline.ArticleExtractor().extract_url(
+                "https://example.com/article", include_images=True
+            )
+
+        self.assertIn('src="data:image/png;base64,', article.html_content)
+        self.assertNotIn('src="https://example.com/image.png"', article.html_content)
 
 
 if __name__ == "__main__":

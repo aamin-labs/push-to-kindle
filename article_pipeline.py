@@ -467,16 +467,33 @@ def safe_filename(title: str) -> str:
     return "".join(c if c.isalnum() or c in " -_" else "_" for c in title[:80])
 
 
+def _fetch_raw_html(url: str) -> str:
+    trafilatura = _trafilatura_module()
+    requests = _requests_module()
+
+    fetch_error: Exception | None = None
+
+    try:
+        raw_html = trafilatura.fetch_url(url)
+        if raw_html:
+            return raw_html
+    except Exception as exc:
+        fetch_error = exc
+
+    try:
+        response = requests.get(url, timeout=15, headers=_BROWSER_HEADERS)
+        response.raise_for_status()
+        return response.text
+    except Exception:
+        if fetch_error is not None:
+            raise fetch_error
+        raise
+
+
 class ArticleExtractor:
     def extract_url(self, url: str, *, include_images: bool = True) -> ExtractedArticle:
         trafilatura = _trafilatura_module()
-        requests = _requests_module()
-
-        raw_html = trafilatura.fetch_url(url)
-        if not raw_html:
-            response = requests.get(url, timeout=15, headers=_BROWSER_HEADERS)
-            response.raise_for_status()
-            raw_html = response.text
+        raw_html = _fetch_raw_html(url)
 
         metadata = trafilatura.bare_extraction(raw_html, url=url)
         title = metadata.title if metadata else None
@@ -514,6 +531,10 @@ class ArticleExtractor:
             raise ValueError("Could not extract article content from page.")
         if should_prefer_raw_content(content, raw_html_content):
             content = raw_html_content
+            if include_images:
+                content, count = _embed_img_srcs(content)
+                if count:
+                    print(f"  Embedded {count} image(s) from raw content")
 
         markdown = trafilatura.extract(
             raw_html, output_format="markdown", include_images=False, include_links=True, url=url
