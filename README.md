@@ -77,55 +77,20 @@ Check `~/logs/kindle-sync.log` to see sync output.
 
 ## Alfred workflow (macOS)
 
-Trigger a send from any article open in Brave without leaving the browser:
+Trigger a send from either an article open in Brave or a selected Finder file:
 
-1. Create a new Alfred workflow with a **Keyword** input (no argument)
-2. Connect it to a **Run Script** action (`/bin/bash`) with:
-
-```bash
-PROJECT_DIR="/Users/yourname/dev/projects/push-to-kindle"
-
-as_cmd='tell application "Brave Browser" to get URL of active tab of front window'
-URL=$(osascript -e "$as_cmd" 2>/dev/null)
-if [[ -z "$URL" || "$URL" == "missing value" ]]; then
-  URL=$(pbpaste)
-fi
-
-result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_to_kindle.py" "$URL" 2>&1)
-EXIT_CODE=$?
-
-if [ $EXIT_CODE -eq 0 ]; then
-    notification=$(echo "$result" | tail -1)
-    osascript -e "display notification \"$notification\" with title \"Sent to Kindle\""
-else
-    osascript -e "display alert \"Push to Kindle Failed\" message \"$result\" as critical"
-fi
-```
-
-The script grabs the active tab URL from Brave automatically and passes it to the Python script. defuddle.md URLs are handled natively by the script (see below). Falls back to clipboard if Brave isn't frontmost.
-
-### Alfred file action
-
-Send a selected Finder file directly to Kindle:
-
-1. Create a new Alfred workflow with a **File Action** input
-2. Connect it to a **Run Script** action (`/bin/bash`) with:
+1. Create a **Keyword** input for URL sends
+2. Create a **File Action** input for Finder-selected files
+3. Connect both inputs to the same **Run Script** action
+4. Set the Run Script language to `/bin/bash` and input handling to **with input as argv**
+5. Use this script:
 
 ```bash
 PROJECT_DIR="/Users/yourname/dev/projects/push-to-kindle"
-
-result=$("$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/send_file_to_kindle.py" "$1" 2>&1)
-EXIT_CODE=$?
-
-if [ $EXIT_CODE -eq 0 ]; then
-    notification=$(echo "$result" | tail -1)
-    osascript -e "display notification \"$notification\" with title \"Sent to Kindle\""
-else
-    osascript -e "display alert \"Push to Kindle Failed\" message \"$result\" as critical"
-fi
+bash "$PROJECT_DIR/alfred_push_to_kindle.sh" "$1"
 ```
 
-This path attaches the selected file with the same Gmail SMTP settings. Markdown files (`.md` / `.markdown`) are sent as `.txt` attachments because Kindle does not handle Markdown reliably; other files are sent unchanged. Kindle file compatibility is handled by Amazon's Personal Documents service.
+The wrapper checks Alfred's argv first. If `$1` is a selected file, it sends that file directly; otherwise it grabs the active Brave URL and falls back to the clipboard. Markdown files (`.md` / `.markdown`) are sent as `.txt` attachments because Kindle does not handle Markdown reliably; other files are sent unchanged.
 
 ## How it works
 
