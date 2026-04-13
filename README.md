@@ -79,11 +79,10 @@ Check `~/logs/kindle-sync.log` to see sync output.
 
 Trigger a send from either an article open in Brave or a selected Finder file:
 
-1. Create a **Keyword** input for URL sends
-2. Create a **File Action** input for Finder-selected files
-3. Connect both inputs to the same **Run Script** action
-4. Set the Run Script language to `/bin/bash` and input handling to **with input as argv**
-5. Use this script:
+1. Create a **Keyword** input and a **File Action** input
+2. Connect both to the same **Run Script** action
+3. Set the Run Script language to `/bin/bash` and input handling to **with input as argv**
+4. Use this script:
 
 ```bash
 PROJECT_DIR="/Users/yourname/dev/projects/push-to-kindle"

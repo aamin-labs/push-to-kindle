@@ -3,34 +3,23 @@
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="$PROJECT_DIR/.venv/bin/python3"
 
-notify_success() {
-    osascript - "$1" <<'APPLESCRIPT'
+run_and_notify() {
+    if result=$("$@" 2>&1); then
+        notification=$(echo "$result" | tail -1)
+        osascript - "$notification" <<'APPLESCRIPT'
 on run argv
     display notification (item 1 of argv) with title "Sent to Kindle"
 end run
 APPLESCRIPT
-}
+        return 0
+    fi
 
-notify_failure() {
-    osascript - "$1" <<'APPLESCRIPT'
+    osascript - "$result" <<'APPLESCRIPT'
 on run argv
     display alert "Push to Kindle Failed" message (item 1 of argv) as critical
 end run
 APPLESCRIPT
-}
-
-run_and_notify() {
-    result=$("$@" 2>&1)
-    exit_code=$?
-
-    if [ $exit_code -eq 0 ]; then
-        notification=$(echo "$result" | tail -1)
-        notify_success "$notification"
-    else
-        notify_failure "$result"
-    fi
-
-    return $exit_code
+    return 1
 }
 
 if [ -n "$1" ] && [ -f "$1" ]; then
