@@ -81,8 +81,13 @@ class KindleDeliveryWorkflowTests(unittest.TestCase):
             epub_converter=lambda title, markdown: b"epub-bytes",
         )
 
-    def test_deliver_url_updates_metadata_and_bear_note(self):
-        result = self.service.deliver_url("https://example.com/article", include_images=False, dry_run=False)
+    def test_deliver_url_updates_metadata_and_bear_note_when_opted_in(self):
+        result = self.service.deliver_url(
+            "https://example.com/article",
+            include_images=False,
+            dry_run=False,
+            save_to_bear=True,
+        )
 
         self.assertEqual("html", result.delivered_format)
         self.assertEqual("note-123", result.bear_note_id)
@@ -91,6 +96,13 @@ class KindleDeliveryWorkflowTests(unittest.TestCase):
         self.assertEqual("Example Article", self.smtp.sent[0][0])
         self.assertEqual(("text", "html"), self.smtp.sent[0][2])
         self.assertEqual(1, len(self.bear.created))
+
+    def test_deliver_url_skips_bear_note_by_default(self):
+        result = self.service.deliver_url("https://example.com/article", dry_run=False)
+
+        self.assertEqual("html", result.delivered_format)
+        self.assertIsNone(result.bear_note_id)
+        self.assertEqual([], self.bear.created)
 
     def test_x_url_uses_defuddle_path(self):
         result = self.service.deliver_url("https://x.com/example/status/1", dry_run=False)

@@ -139,11 +139,18 @@ class KindleDeliveryService:
         self._platform = platform or sys.platform
         self._epub_converter = epub_converter
 
-    def deliver_url(self, url: str, *, include_images: bool = True, dry_run: bool = False) -> DeliveryResult:
+    def deliver_url(
+        self,
+        url: str,
+        *,
+        include_images: bool = True,
+        dry_run: bool = False,
+        save_to_bear: bool = False,
+    ) -> DeliveryResult:
         print(f"Fetching: {url}")
         article = self._extractor.prepare_for_kindle(url, include_images=include_images)
         print(f"Extracted: {article.title!r}")
-        return self._deliver(article, dry_run=dry_run)
+        return self._deliver(article, dry_run=dry_run, save_to_bear=save_to_bear)
 
     def deliver_html_file(
         self,
@@ -151,10 +158,11 @@ class KindleDeliveryService:
         *,
         title_override: str | None = None,
         dry_run: bool = False,
+        save_to_bear: bool = False,
     ) -> DeliveryResult:
         print(f"Reading: {path}")
         article = self._extractor.prepare_local_html(path, title_override=title_override)
-        return self._deliver(article, dry_run=dry_run)
+        return self._deliver(article, dry_run=dry_run, save_to_bear=save_to_bear)
 
     def deliver_file(self, path: str, *, dry_run: bool = False) -> DeliveryResult:
         file_path = Path(path).expanduser().resolve()
@@ -180,7 +188,7 @@ class KindleDeliveryService:
         print(f"Sent to Kindle: {attachment.filename}")
         return DeliveryResult(title=title, delivered_format="file", output_path=str(file_path))
 
-    def _deliver(self, article: ExtractedArticle, *, dry_run: bool) -> DeliveryResult:
+    def _deliver(self, article: ExtractedArticle, *, dry_run: bool, save_to_bear: bool) -> DeliveryResult:
         if article.delivery_format == "epub":
             if dry_run:
                 out_path = self._write_preview(article.title, article.markdown_content, "md")
@@ -199,7 +207,7 @@ class KindleDeliveryService:
 
         note_id = None
         self._metadata_store.save_snippet(article.title, article.markdown_content)
-        if article.source_url and self._platform == "darwin":
+        if save_to_bear and article.source_url and self._platform == "darwin":
             note_id = self._sync_bear_note(article.title, article.source_url, article.markdown_content)
         print(f"Sent to Kindle: {article.title}")
         return DeliveryResult(

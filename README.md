@@ -41,13 +41,16 @@ python3 send_to_kindle.py --no-images "https://example.com/article"
 # Preview extraction locally without sending
 python3 send_to_kindle.py --dry-run "https://example.com/article"
 
+# Also save the article to Bear (macOS only)
+python3 send_to_kindle.py --save-to-bear "https://example.com/article"
+
 # Send a local file directly to Kindle
 python3 send_file_to_kindle.py "/path/to/book.pdf"
 ```
 
 The article is extracted, wrapped in a clean HTML document, and delivered to your Kindle. It appears on your device within a minute or two.
 
-On macOS, a Bear note is also created automatically — tagged `#0a/reading`, with the article title, URL, date, and full article body in Markdown. The note ID is saved to `~/logs/kindle-bear-map.json` for highlight sync later.
+On macOS, pass `--save-to-bear` if you also want a Bear note — tagged `#0a/reading`, with the article title, URL, date, and full article body in Markdown. The note ID is saved to `~/logs/kindle-bear-map.json` for highlight sync later.
 
 ## Syncing highlights
 
@@ -99,7 +102,7 @@ The wrapper checks Alfred's argv first. If `$1` is a selected file, it sends tha
 3. Downloads and embeds images as base64 data URIs (skip with `--no-images`)
 4. Wraps it in a minimal HTML document with readable typography
 5. Sends it via SMTP
-6. Creates a Bear note tagged `#0a/reading` with the article Markdown body (macOS, URL path only)
+6. Optionally creates a Bear note tagged `#0a/reading` with the article Markdown body when `--save-to-bear` is passed (macOS, URL path only)
 
 **Selected file path (Finder / Alfred File Action):**
 1. Validates the selected path is a readable file

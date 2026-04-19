@@ -46,6 +46,11 @@ def main() -> None:
         action="store_true",
         help="Skip downloading and embedding images",
     )
+    parser.add_argument(
+        "--save-to-bear",
+        action="store_true",
+        help="Create a Bear note too (macOS only)",
+    )
     args = parser.parse_args()
 
     if not args.html_file and not args.url:
@@ -54,9 +59,19 @@ def main() -> None:
     service = load_delivery_service(ArticleExtractor())
     try:
         if args.html_file:
-            service.deliver_html_file(args.html_file, title_override=args.title, dry_run=args.dry_run)
+            service.deliver_html_file(
+                args.html_file,
+                title_override=args.title,
+                dry_run=args.dry_run,
+                save_to_bear=args.save_to_bear,
+            )
         else:
-            service.deliver_url(args.url, include_images=not args.no_images, dry_run=args.dry_run)
+            service.deliver_url(
+                args.url,
+                include_images=not args.no_images,
+                dry_run=args.dry_run,
+                save_to_bear=args.save_to_bear,
+            )
     except Exception as exc:
         parser.exit(status=1, message=f"Error: {exc}\n")
 
