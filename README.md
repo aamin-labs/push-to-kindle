@@ -89,10 +89,16 @@ Trigger a send from either an article open in Brave or a selected Finder file:
 
 ```bash
 PROJECT_DIR="/Users/yourname/dev/projects/push-to-kindle"
-bash "$PROJECT_DIR/alfred_push_to_kindle.sh" "$1"
+bash "$PROJECT_DIR/alfred_push_to_kindle.sh" "$1" "$2"
 ```
 
 The wrapper checks Alfred's argv first. If `$1` is a selected file, it sends that file directly; otherwise it grabs the active Brave URL and falls back to the clipboard. Markdown files (`.md` / `.markdown`) are sent as `.txt` attachments because Kindle does not handle Markdown reliably; other files are sent unchanged.
+
+**Bear toggle:** Alfred can opt into Bear note creation for URL sends by either:
+- passing `--save-to-bear` as the second argv value
+- or setting `ALFRED_SAVE_TO_BEAR=1` (or `SAVE_TO_BEAR=1`) in the Run Script environment
+
+Good setup: keep your normal action as-is, then make a second Alfred trigger that runs the same script with `$2` set to `--save-to-bear`.
 
 ## How it works
 
