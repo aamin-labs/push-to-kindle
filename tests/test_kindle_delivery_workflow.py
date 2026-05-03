@@ -146,7 +146,7 @@ class KindleDeliveryWorkflowTests(unittest.TestCase):
         self.assertEqual(("application", "octet-stream"), self.smtp.sent[0][2])
         self.assertEqual("unknownkindle", self.smtp.sent[0][3])
 
-    def test_deliver_file_sends_markdown_as_txt_attachment(self):
+    def test_deliver_file_sends_markdown_as_html_attachment(self):
         file_path = Path(self.tmpdir.name) / "Notes.md"
         file_path.write_bytes(b"# Heading\n\n- item\n")
 
@@ -154,20 +154,36 @@ class KindleDeliveryWorkflowTests(unittest.TestCase):
 
         self.assertEqual("file", result.delivered_format)
         self.assertEqual("Notes", result.title)
-        self.assertEqual(
-            ("Notes", b"# Heading\n\n- item\n", ("text", "plain"), "txt", "Notes.txt"),
-            self.smtp.sent[0],
-        )
+        title, payload, mime_type, extension, filename = self.smtp.sent[0]
+        self.assertEqual("Notes", title)
+        self.assertEqual(("text", "html"), mime_type)
+        self.assertEqual("html", extension)
+        self.assertEqual("Notes.html", filename)
+        self.assertIn(b"<h1>Heading</h1>", payload)
+        self.assertIn(b"<ul><li>item</li></ul>", payload)
 
-    def test_deliver_file_sends_markdown_extension_case_insensitively_as_txt(self):
+    def test_deliver_file_sends_markdown_extension_case_insensitively_as_html(self):
         file_path = Path(self.tmpdir.name) / "Draft.MARKDOWN"
         file_path.write_bytes(b"draft body")
 
         self.service.deliver_file(str(file_path))
 
-        self.assertEqual(("text", "plain"), self.smtp.sent[0][2])
-        self.assertEqual("txt", self.smtp.sent[0][3])
-        self.assertEqual("Draft.txt", self.smtp.sent[0][4])
+        self.assertEqual(("text", "html"), self.smtp.sent[0][2])
+        self.assertEqual("html", self.smtp.sent[0][3])
+        self.assertEqual("Draft.html", self.smtp.sent[0][4])
+        self.assertIn(b"<p>draft body</p>", self.smtp.sent[0][1])
+
+    def test_deliver_file_preserves_markdown_syntax_inside_inline_code(self):
+        file_path = Path(self.tmpdir.name) / "Code Notes.md"
+        file_path.write_text("Use `**kwargs**` and `[x](y)`.\n", encoding="utf-8")
+
+        self.service.deliver_file(str(file_path))
+
+        payload = self.smtp.sent[0][1]
+        self.assertIn(b"<code>**kwargs**</code>", payload)
+        self.assertIn(b"<code>[x](y)</code>", payload)
+        self.assertNotIn(b"<code><strong>kwargs</strong></code>", payload)
+        self.assertNotIn(b'<code><a href="y">x</a></code>', payload)
 
     def test_deliver_file_dry_run_validates_without_sending(self):
         file_path = Path(self.tmpdir.name) / "book.epub"

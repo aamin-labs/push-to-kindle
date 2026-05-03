@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import mimetypes
 import os
+import re
 import smtplib
 import sys
 import textwrap
@@ -13,6 +14,7 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape as html_escape
 from pathlib import Path
 
 from article_pipeline import ExtractedArticle, markdown_to_epub, safe_filename
@@ -30,6 +32,7 @@ class DeliveryResult:
 @dataclass
 class FileAttachment:
     filename: str
+    attachment_bytes: bytes
     mime_type: tuple[str, str]
     extension: str
 
@@ -180,7 +183,7 @@ class KindleDeliveryService:
         print(f"Sending file: {file_path}")
         self._smtp_sender.send_attachment(
             title,
-            file_path.read_bytes(),
+            attachment.attachment_bytes,
             attachment.mime_type,
             attachment.extension,
             filename=attachment.filename,
@@ -247,13 +250,14 @@ class KindleDeliveryService:
 
 
 def wrap_html(title: str, content: str) -> str:
+    escaped_title = html_escape(title)
     return textwrap.dedent(
         f"""\
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="UTF-8">
-          <title>{title}</title>
+          <title>{escaped_title}</title>
           <style>
             body {{ font-family: Georgia, serif; line-height: 1.6; max-width: 680px;
                    margin: 2em auto; padding: 0 1em; color: #111; }}
@@ -268,7 +272,7 @@ def wrap_html(title: str, content: str) -> str:
           </style>
         </head>
         <body>
-          <h1>{title}</h1>
+          <h1>{escaped_title}</h1>
           {content}
         </body>
         </html>
@@ -286,16 +290,126 @@ def _guess_mime_type(path: Path) -> tuple[str, str]:
 
 def _prepare_file_attachment(path: Path) -> FileAttachment:
     if path.suffix.lower() in {".md", ".markdown"}:
+        html = wrap_html(path.stem, markdown_to_html(path.read_text(encoding="utf-8")))
         return FileAttachment(
-            filename=f"{path.stem}.txt",
-            mime_type=("text", "plain"),
-            extension="txt",
+            filename=f"{path.stem}.html",
+            attachment_bytes=html.encode("utf-8"),
+            mime_type=("text", "html"),
+            extension="html",
         )
     return FileAttachment(
         filename=path.name,
+        attachment_bytes=path.read_bytes(),
         mime_type=_guess_mime_type(path),
         extension=path.suffix.lstrip(".") or "bin",
     )
+
+
+def markdown_to_html(markdown: str) -> str:
+    lines = markdown.splitlines()
+    blocks: list[str] = []
+    paragraph: list[str] = []
+    list_items: list[str] = []
+    blockquote: list[str] = []
+    code_lines: list[str] = []
+    in_code_block = False
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            blocks.append(f"<p>{_markdown_inline_to_html(' '.join(paragraph))}</p>")
+            paragraph.clear()
+
+    def flush_list() -> None:
+        if list_items:
+            blocks.append("<ul>" + "".join(f"<li>{item}</li>" for item in list_items) + "</ul>")
+            list_items.clear()
+
+    def flush_blockquote() -> None:
+        if blockquote:
+            blocks.append(f"<blockquote>{_markdown_inline_to_html(' '.join(blockquote))}</blockquote>")
+            blockquote.clear()
+
+    def flush_code_block() -> None:
+        if code_lines:
+            escaped_code = html_escape("\n".join(code_lines))
+            blocks.append(f"<pre><code>{escaped_code}</code></pre>")
+            code_lines.clear()
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            if in_code_block:
+                flush_code_block()
+                in_code_block = False
+            else:
+                flush_paragraph()
+                flush_list()
+                flush_blockquote()
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_lines.append(line)
+            continue
+
+        if not stripped:
+            flush_paragraph()
+            flush_list()
+            flush_blockquote()
+            continue
+
+        heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+        if heading:
+            flush_paragraph()
+            flush_list()
+            flush_blockquote()
+            level = len(heading.group(1))
+            blocks.append(f"<h{level}>{_markdown_inline_to_html(heading.group(2))}</h{level}>")
+            continue
+
+        item = re.match(r"^(?:[-*+]|\d+\.)\s+(.+)$", stripped)
+        if item:
+            flush_paragraph()
+            flush_blockquote()
+            list_items.append(_markdown_inline_to_html(item.group(1)))
+            continue
+
+        quote = re.match(r"^>\s?(.*)$", stripped)
+        if quote:
+            flush_paragraph()
+            flush_list()
+            blockquote.append(quote.group(1))
+            continue
+
+        flush_list()
+        flush_blockquote()
+        paragraph.append(stripped)
+
+    flush_code_block()
+    flush_paragraph()
+    flush_list()
+    flush_blockquote()
+    return "\n".join(blocks)
+
+
+def _markdown_inline_to_html(text: str) -> str:
+    code_spans: list[str] = []
+
+    def store_code_span(match: re.Match[str]) -> str:
+        code_spans.append(f"<code>{html_escape(match.group(1))}</code>")
+        return f"\0CODE{len(code_spans) - 1}\0"
+
+    protected = re.sub(r"`([^`]+)`", store_code_span, text)
+    escaped = html_escape(protected)
+    escaped = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r'<img src="\2" alt="\1"/>', escaped)
+    escaped = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', escaped)
+    escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", escaped)
+    for index, code_span in enumerate(code_spans):
+        escaped = escaped.replace(f"\0CODE{index}\0", code_span)
+    return escaped
 
 
 def load_delivery_service(extractor) -> KindleDeliveryService:

@@ -92,7 +92,7 @@ PROJECT_DIR="/Users/yourname/dev/projects/push-to-kindle"
 bash "$PROJECT_DIR/alfred_push_to_kindle.sh" "$1" "$2"
 ```
 
-The wrapper checks Alfred's argv first. If `$1` is a selected file, it sends that file directly; otherwise it grabs the active Brave URL and falls back to the clipboard. Markdown files (`.md` / `.markdown`) are sent as `.txt` attachments because Kindle does not handle Markdown reliably; other files are sent unchanged.
+The wrapper checks Alfred's argv first. If `$1` is a selected file, it sends that file directly; otherwise it grabs the active Brave URL and falls back to the clipboard. Markdown files (`.md` / `.markdown`) are converted to `.html` attachments before sending so headers, lists, links, code blocks, and quotes render more readably on Kindle; other files are sent unchanged.
 
 **Bear toggle:** Alfred can opt into Bear note creation for URL sends by either:
 - passing `--save-to-bear` as the second argv value
