@@ -198,10 +198,10 @@ class KindleDeliveryService:
                 return DeliveryResult(title=article.title, delivered_format="dry-run", output_path=str(out_path))
 
             print("Converting to EPUB...")
-            payload = self._epub_converter(article.title, article.markdown_content)
+            payload = self._epub_converter(article.title, article.markdown_content, article.author)
             self._smtp_sender.send_attachment(article.title, payload, ("application", "epub+zip"), "epub")
         else:
-            html = wrap_html(article.title, article.html_content)
+            html = wrap_html(article.title, article.html_content, article.author)
             if dry_run:
                 out_path = self._write_preview(article.title, html, "html")
                 return DeliveryResult(title=article.title, delivered_format="dry-run", output_path=str(out_path))
@@ -249,8 +249,15 @@ class KindleDeliveryService:
         return out_path
 
 
-def wrap_html(title: str, content: str) -> str:
+def wrap_html(title: str, content: str, author: str = "") -> str:
     escaped_title = html_escape(title)
+    escaped_author = html_escape(author)
+    author_meta = (
+        f'<meta name="author" content="{escaped_author}">\n          '
+        f'<meta name="dc.creator" content="{escaped_author}">'
+        if author
+        else ""
+    )
     return textwrap.dedent(
         f"""\
         <!DOCTYPE html>
@@ -258,6 +265,7 @@ def wrap_html(title: str, content: str) -> str:
         <head>
           <meta charset="UTF-8">
           <title>{escaped_title}</title>
+          {author_meta}
           <style>
             body {{ font-family: Georgia, serif; line-height: 1.6; max-width: 680px;
                    margin: 2em auto; padding: 0 1em; color: #111; }}

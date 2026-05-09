@@ -52,6 +52,7 @@ def _lxml_etree_module():
 class ExtractedArticle:
     title: str
     source_url: str
+    author: str = ""
     html_content: str = ""
     markdown_content: str = ""
     delivery_format: str = "html"
@@ -467,6 +468,23 @@ def safe_filename(title: str) -> str:
     return "".join(c if c.isalnum() or c in " -_" else "_" for c in title[:80])
 
 
+def source_domain(url: str) -> str:
+    host = urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _clean_author(value) -> str:
+    if not value:
+        return ""
+    if isinstance(value, (list, tuple)):
+        value = ", ".join(str(item).strip() for item in value if str(item).strip())
+    elif not isinstance(value, str):
+        return ""
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def _fetch_raw_html(url: str) -> str:
     trafilatura = _trafilatura_module()
     requests = _requests_module()
@@ -515,6 +533,7 @@ class ArticleExtractor:
 
         metadata = trafilatura.bare_extraction(raw_html, url=url)
         title = metadata.title if metadata else None
+        author = _clean_author(getattr(metadata, "author", "")) or source_domain(url)
         if not title:
             match = re.search(r"<title[^>]*>([^<]+)</title>", raw_html, re.IGNORECASE)
             title = match.group(1).strip() if match else "Article"
@@ -563,6 +582,7 @@ class ArticleExtractor:
         return ExtractedArticle(
             title=title,
             source_url=url,
+            author=author,
             html_content=content,
             markdown_content=markdown,
             delivery_format="html",
@@ -590,6 +610,7 @@ class ArticleExtractor:
             return match.group(1).strip() if match else ""
 
         title = field("title") or "Article"
+        author = _clean_author(field("author"))
         original_url = field("source")
         if not original_url:
             prefix = "https://defuddle.md/"
@@ -599,6 +620,7 @@ class ArticleExtractor:
         return ExtractedArticle(
             title=title,
             source_url=original_url,
+            author=author or source_domain(original_url),
             markdown_content=full_markdown,
             delivery_format="epub",
         )
@@ -613,7 +635,7 @@ class ArticleExtractor:
         return ExtractedArticle(title=title, source_url="", html_content=content, delivery_format="html")
 
 
-def markdown_to_epub(title: str, markdown: str) -> bytes:
+def markdown_to_epub(title: str, markdown: str, author: str = "") -> bytes:
     try:
         subprocess.run(["pandoc", "--version"], capture_output=True, check=True)
     except FileNotFoundError as exc:
@@ -628,10 +650,11 @@ def markdown_to_epub(title: str, markdown: str) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as handle:
             epub_file = handle.name
 
-        result = subprocess.run(
-            ["pandoc", "--from", "markdown", "--to", "epub3", "-o", epub_file, md_file],
-            capture_output=True,
-        )
+        command = ["pandoc", "--from", "markdown", "--to", "epub3", "-o", epub_file, "--metadata", f"title={title}"]
+        if author:
+            command.extend(["--metadata", f"author={author}"])
+        command.append(md_file)
+        result = subprocess.run(command, capture_output=True)
         if result.returncode != 0:
             raise RuntimeError(f"pandoc error: {result.stderr.decode().strip()}")
 

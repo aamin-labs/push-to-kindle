@@ -149,6 +149,34 @@ class ExtractionRepairTests(unittest.TestCase):
         self.assertIn('src="data:image/png;base64,', article.html_content)
         self.assertNotIn('src="https://example.com/image.png"', article.html_content)
 
+    def test_url_extraction_uses_metadata_author(self):
+        fake_trafilatura = mock.Mock()
+        fake_trafilatura.bare_extraction.return_value = mock.Mock(title="Article", author="Jane Writer")
+        fake_trafilatura.extract.return_value = "Body text"
+
+        with mock.patch.object(article_pipeline, "_fetch_raw_html", return_value="<html></html>"), mock.patch.object(
+            article_pipeline, "_trafilatura_module", return_value=fake_trafilatura
+        ), mock.patch.object(article_pipeline, "extract_raw_preserved_content", return_value=("", "")):
+            article = article_pipeline.ArticleExtractor().prepare_for_kindle(
+                "https://example.com/article", include_images=False
+            )
+
+        self.assertEqual("Jane Writer", article.author)
+
+    def test_url_extraction_falls_back_to_source_domain_author(self):
+        fake_trafilatura = mock.Mock()
+        fake_trafilatura.bare_extraction.return_value = mock.Mock(title="Article", author="")
+        fake_trafilatura.extract.return_value = "Body text"
+
+        with mock.patch.object(article_pipeline, "_fetch_raw_html", return_value="<html></html>"), mock.patch.object(
+            article_pipeline, "_trafilatura_module", return_value=fake_trafilatura
+        ), mock.patch.object(article_pipeline, "extract_raw_preserved_content", return_value=("", "")):
+            article = article_pipeline.ArticleExtractor().prepare_for_kindle(
+                "https://www.example.com/article", include_images=False
+            )
+
+        self.assertEqual("example.com", article.author)
+
     def test_prepare_for_kindle_routes_x_urls_through_defuddle(self):
         extractor = article_pipeline.ArticleExtractor()
         expected = article_pipeline.ExtractedArticle(

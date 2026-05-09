@@ -18,12 +18,14 @@ class FakeExtractor:
             return ExtractedArticle(
                 title="Thread",
                 source_url=url,
+                author="x.com",
                 markdown_content="# Thread",
                 delivery_format="epub",
             )
         return ExtractedArticle(
             title="Example Article",
             source_url=url,
+            author="Example Author",
             html_content="<p>Hello world</p>",
             markdown_content="Hello world",
             delivery_format="html",
@@ -78,7 +80,7 @@ class KindleDeliveryWorkflowTests(unittest.TestCase):
             metadata_store=self.metadata_store,
             bear_client=self.bear,
             platform="darwin",
-            epub_converter=lambda title, markdown: b"epub-bytes",
+            epub_converter=lambda title, markdown, author="": b"epub-bytes",
         )
 
     def test_deliver_url_updates_metadata_and_bear_note_when_opted_in(self):
@@ -94,6 +96,7 @@ class KindleDeliveryWorkflowTests(unittest.TestCase):
         self.assertEqual([("prepare_for_kindle", "https://example.com/article", False)], self.extractor.calls)
         self.assertEqual(1, len(self.smtp.sent))
         self.assertEqual("Example Article", self.smtp.sent[0][0])
+        self.assertIn(b'<meta name="author" content="Example Author">', self.smtp.sent[0][1])
         self.assertEqual(("text", "html"), self.smtp.sent[0][2])
         self.assertEqual(1, len(self.bear.created))
 
