@@ -46,6 +46,12 @@ python3 send_to_kindle.py --save-to-bear "https://example.com/article"
 
 # Send a local file directly to Kindle
 python3 send_file_to_kindle.py "/path/to/book.pdf"
+
+# Send emails labelled "Kindle" in Gmail
+python3 poll_gmail_to_kindle.py
+
+# Preview labelled emails locally without sending
+python3 poll_gmail_to_kindle.py --dry-run
 ```
 
 The article is extracted, wrapped in a clean HTML document, and delivered to your Kindle. It appears on your device within a minute or two.
@@ -77,6 +83,42 @@ launchctl load ~/Library/LaunchAgents/com.aamin.kindle-sync.plist
 ```
 
 Check `~/logs/kindle-sync.log` to see sync output.
+
+## Gmail label workflow
+
+Use this when you want to push newsletters or long emails from your inbox to Kindle.
+
+1. In Gmail, create a label named `Kindle`.
+2. Apply that label to any email you want to read on Kindle.
+3. Run:
+
+```bash
+python3 poll_gmail_to_kindle.py
+```
+
+The script selects the `Kindle` label over IMAP, converts each email body into a clean `.html` attachment, sends it to your Kindle address, adds the processed label `Kindle/Sent`, and removes the original `Kindle` label. A local seen file at `~/logs/kindle-email-processed.json` also prevents duplicate sends.
+
+Add these to `.env` if they differ from your SMTP login:
+
+```env
+IMAP_SERVER=imap.gmail.com
+IMAP_USER=you@gmail.com
+IMAP_PASSWORD=your-gmail-app-password
+KINDLE_GMAIL_LABEL=Kindle
+KINDLE_PROCESSED_LABEL=Kindle/Sent
+```
+
+**Mac mini launchd example:** run every 5 minutes with a repo-owned wrapper or direct command:
+
+```xml
+<key>StartInterval</key>
+<integer>300</integer>
+<key>ProgramArguments</key>
+<array>
+  <string>/Users/yourname/dev/projects/push-to-kindle/.venv/bin/python3</string>
+  <string>/Users/yourname/dev/projects/push-to-kindle/poll_gmail_to_kindle.py</string>
+</array>
+```
 
 ## Alfred workflow (macOS)
 
