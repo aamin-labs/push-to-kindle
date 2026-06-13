@@ -123,6 +123,8 @@ class GmailToKindleTests(unittest.TestCase):
 
             self.assertEqual("dry-run", results[0].delivered_format)
             self.assertTrue(Path(results[0].output_path).exists())
+            self.assertEqual(Path(tempfile.gettempdir()), Path(results[0].output_path).parent)
+            self.assertFalse((Path(tmp) / "Preview.html").exists())
             self.assertEqual([], smtp.sent)
             self.assertNotIn(("uid", "STORE", "101", "+X-GM-LABELS", '("Kindle/Sent")'), fake_imap.calls)
 

@@ -7,6 +7,7 @@ import imaplib
 import os
 import re
 import ssl
+import tempfile
 from dataclasses import dataclass
 from email.message import Message
 from html import escape as html_escape
@@ -91,7 +92,7 @@ class GmailLabelPoller:
                     continue
 
                 if dry_run:
-                    out_path = Path(f"{safe_filename(inbox_email.subject)}.html").resolve()
+                    out_path = Path(tempfile.gettempdir()) / f"{safe_filename(inbox_email.subject)}.html"
                     out_path.write_text(inbox_email.html_body, encoding="utf-8")
                     results.append(DeliveryResult(inbox_email.subject, "dry-run", str(out_path)))
                 else:
